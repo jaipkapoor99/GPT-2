@@ -2,12 +2,10 @@
 GPT-2 (124M) Text Generation CLI Script
 Features:
 Top-K Sampling and Temperature-controlled Autoregressive Generation
-Supports loading gpt2_model.pth.gz compressed checkpoints.
 """
 
 import sys
 import os
-import gzip
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer
@@ -45,14 +43,8 @@ def main():
     config = GPT2Config(vocab_size=tokenizer.vocab_size)
     model = GPT2(config).to(device)
     
-    gz_checkpoint = "gpt2_model.pth.gz"
     pth_checkpoint = "gpt2_model.pth"
-    
-    if os.path.exists(gz_checkpoint):
-        print(f"Loading trained weights from compressed '{gz_checkpoint}'...")
-        with gzip.open(gz_checkpoint, "rb") as f:
-            model.load_state_dict(torch.load(f, map_location=device))
-    elif os.path.exists(pth_checkpoint):
+    if os.path.exists(pth_checkpoint):
         print(f"Loading trained weights from '{pth_checkpoint}'...")
         model.load_state_dict(torch.load(pth_checkpoint, map_location=device))
     else:
