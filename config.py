@@ -11,7 +11,6 @@ from typing import Optional
 
 @dataclass
 class GPT2Config:
-    num_documents: int = 50000  # FineWeb dataset documents to load
     B: int = 16                 # Micro-batch size per pass
     T: int = 1024               # Time / Sequence length (T)
     C: int = 768                # Channels / Embedding dimension (C)
