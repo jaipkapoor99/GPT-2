@@ -43,6 +43,8 @@ A high-performance **Masterclass Showcase of AI Engineering Skill**—re-impleme
 
 ## Pre-Training Loss Progression (3,000 Steps / 393M Tokens)
 
+![GPT-2 Pre-Training Loss Curve](loss_curve.png)
+
 ```text
 +-------+------------+-----------+-----------+
 | Step  | Train Loss | Dev Loss  |    LR     |
