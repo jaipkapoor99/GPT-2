@@ -1,7 +1,7 @@
 """
 GPT-2 Configuration Module
 Contains dataclass parameters for the 2026-standard GPT-2 (124M) architecture.
-Dynamically populates vocab_size from dataset metadata (fineweb_meta.json) or active tokenizer.
+Dynamically populates vocab_size from dataset metadata (fineweb_meta.json or shards/fineweb_shard_0000_meta.json).
 """
 
 import os
@@ -31,10 +31,16 @@ class GPT2Config:
         
         # Dynamically load vocab_size from dataset metadata if not explicitly specified
         if self.vocab_size is None:
-            meta_file = "fineweb_meta.json"
-            if os.path.exists(meta_file):
-                with open(meta_file, "r") as f:
-                    meta = json.load(f)
-                    self.vocab_size = meta.get("vocab_size", 49152)
-            else:
+            meta_candidates = [
+                "fineweb_meta.json",
+                os.path.join("shards", "fineweb_shard_0000_meta.json")
+            ]
+            for meta_file in meta_candidates:
+                if os.path.exists(meta_file):
+                    with open(meta_file, "r") as f:
+                        meta = json.load(f)
+                        self.vocab_size = meta.get("vocab_size", 49152)
+                    break
+                    
+            if self.vocab_size is None:
                 self.vocab_size = 49152 # Fallback default

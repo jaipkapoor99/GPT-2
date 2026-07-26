@@ -1,10 +1,10 @@
 """
 GPT-2 (124M) Text Generation CLI Script
 Features:
-Top-K Sampling and Temperature-controlled Autoregressive Generation
+Top-K Sampling and Temperature-controlled Autoregressive Generation with full CLI argument parser.
 """
 
-import sys
+import argparse
 import os
 import torch
 import torch.nn.functional as F
@@ -34,7 +34,14 @@ def generate_text(model, tokenizer, config, start_str="Hello, I am a language mo
     return tokenizer.decode(input_indices)
 
 def main():
-    prompt = sys.argv[1] if len(sys.argv) > 1 else "Hello, I am a language model,"
+    parser = argparse.ArgumentParser(description="GPT-2 Text Generation CLI")
+    parser.add_argument("prompt", type=str, nargs="?", default="The future of artificial intelligence is", help="Input prompt text")
+    parser.add_argument("--max-tokens", type=int, default=60, help="Maximum new tokens to generate")
+    parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
+    parser.add_argument("--top-k", type=int, default=50, help="Top-K sampling cutoff")
+    parser.add_argument("--load-checkpoint", type=str, default="gpt2_model.pth", help="Path to model checkpoint")
+    args = parser.parse_args()
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     print(f"Loading SmolLM Tokenizer...")
@@ -43,15 +50,14 @@ def main():
     config = GPT2Config(vocab_size=tokenizer.vocab_size)
     model = GPT2(config).to(device)
     
-    pth_checkpoint = "gpt2_model.pth"
-    if os.path.exists(pth_checkpoint):
-        print(f"Loading trained weights from '{pth_checkpoint}'...")
-        model.load_state_dict(torch.load(pth_checkpoint, map_location=device))
+    if os.path.exists(args.load_checkpoint):
+        print(f"Loading trained weights from '{args.load_checkpoint}'...")
+        model.load_state_dict(torch.load(args.load_checkpoint, map_location=device))
     else:
-        print("No trained checkpoint found! Running generation with initial weights...")
+        print(f"Checkpoint '{args.load_checkpoint}' not found! Running generation with initial weights...")
         
-    print(f"\nPrompt: '{prompt}'")
-    output = generate_text(model, tokenizer, config, start_str=prompt, max_new_tokens=60, temperature=0.7, top_k=50, device=device)
+    print(f"\nPrompt: '{args.prompt}'")
+    output = generate_text(model, tokenizer, config, start_str=args.prompt, max_new_tokens=args.max_tokens, temperature=args.temperature, top_k=args.top_k, device=device)
     print("\n--- GENERATED TEXT ---")
     print(output)
 

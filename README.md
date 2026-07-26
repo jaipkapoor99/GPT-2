@@ -19,7 +19,6 @@ This repository is benchmarked and optimized for high-throughput local pre-train
 * **Python Runtime:** Python 3.13.11 (Miniconda 26.1.1)
 * **PyTorch Ecosystem:** PyTorch 2.6+ (CUDA 12.8/13.3 enabled)
 * **Hugging Face Stack:** `transformers` v5.14.1, `accelerate` v1.14.0, `datasets` v5.0.0
-* **Node.js / TypeScript Stack:** Node.js v24.18.0 (LTS), npm v12.0.1, TypeScript v7.0.2 (Go-compiled `tsc`)
 
 ---
 
@@ -78,7 +77,7 @@ python train.py --from-pretrained gpt2
 
 Optionally load local compressed checkpoint weights:
 ```bash
-python train.py --load-checkpoint gpt2_model.pth.gz
+python train.py --load-checkpoint gpt2_model.pth
 ```
 
 ### 4. Text Generation
@@ -108,4 +107,4 @@ python generate.py "The future of artificial intelligence is"
 ---
 
 ## License & Acknowledgments
-Built in alignment with modern 2026 AI engineering standards, drawing architectural inspiration from Andrej Karpathy's `nanoGPT`, OpenAI GPT-2, LLaMA 3, and Hugging Face SmolLM.
+Built in alignment with modern 2026 AI engineering standards, drawing architectural inspiration from Andrej Karpathy's `nanochat`, OpenAI GPT-2, LLaMA 3, and Hugging Face SmolLM.
