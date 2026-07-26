@@ -4,7 +4,7 @@ Features:
 1. CLI arguments for --from-pretrained (load OpenAI weights or local checkpoint)
 2. Tabulated loss metrics formatting
 3. Loss tracking saved to CSV & JSON (loss_history.csv, loss_history.json)
-4. Visual Loss Curve rendered & saved to loss_curve.png
+4. Vector Loss Curve rendered & saved to loss_curve.svg
 5. Fast, streamable PyTorch weight checkpoint saving (gpt2_model.pth)
 """
 
@@ -175,7 +175,7 @@ def main():
             
         accelerator.print("✓ Saved loss metrics to 'loss_history.json' and 'loss_history.csv'")
         
-        # Render & Save Visual Loss Curve Plot
+        # Render & Save Vector SVG Loss Curve Plot
         steps_list = [h["step"] for h in history]
         train_list = [h["train_loss"] for h in history]
         dev_list   = [h["dev_loss"] for h in history]
@@ -189,9 +189,9 @@ def main():
         plt.legend(fontsize=12)
         plt.grid(True, linestyle="--", alpha=0.7)
         plt.tight_layout()
-        plt.savefig("loss_curve.png", dpi=300)
+        plt.savefig("loss_curve.svg", format="svg")
         plt.close()
-        accelerator.print("✓ Visual loss curve rendered and saved to 'loss_curve.png'")
+        accelerator.print("✓ Vector loss curve rendered and saved to 'loss_curve.svg'")
 
 if __name__ == "__main__":
     main()

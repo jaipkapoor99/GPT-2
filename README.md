@@ -37,13 +37,13 @@ A high-performance **Masterclass Showcase of AI Engineering Skill**—re-impleme
 4. **Weight Tying:** Shares parameters between token embeddings (`wte`) and output projection (`lm_head`).
 5. **Zero-Copy Memory Mapped Dataset Loading (`np.memmap`):** Direct token offset slicing over 1.9 Billion tokens (`shards/fineweb_shard_XXXX.bin`) with 0.00 MB RAM overhead.
 6. **Pre-trained Weights & Local Checkpoint Loader:** Flexible CLI flags to load pre-trained OpenAI weights (`--from-pretrained gpt2`) or resume local training (`--load-checkpoint gpt2_model.pth`).
-7. **Loss Tabulation & Visualization:** Tabulates metric rows during training, exports `loss_history.csv` & `loss_history.json`, and renders a high-res `loss_curve.png`.
+7. **Loss Tabulation & Vector Visualization:** Tabulates metric rows during training, exports `loss_history.csv` & `loss_history.json`, and renders a crisp vector `loss_curve.svg`.
 
 ---
 
 ## Pre-Training Loss Progression (3,000 Steps / 393M Tokens)
 
-![GPT-2 Pre-Training Loss Curve](loss_curve.png)
+![GPT-2 Pre-Training Loss Curve](loss_curve.svg)
 
 ```text
 +-------+------------+-----------+-----------+
