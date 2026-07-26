@@ -9,6 +9,7 @@ A modular, production-grade PyTorch implementation of the **GPT-2 (124M)** archi
 This repository is benchmarked and optimized for high-throughput local pre-training on the following hardware & software environment:
 
 ### Hardware Specifications
+* **CPU:** AMD Ryzen 7 9800X3D (8 Cores / 16 Threads with 3D V-Cache Technology)
 * **GPU:** NVIDIA GeForce RTX 5090 (32GB VRAM, 600W Power Limit)
 * **GPU Performance:** ~576W active power draw, 98% compute utilization, peak 71°C thermal performance under full load.
 * **Host Architecture:** WSL2 on Ubuntu 24.04 LTS (Linux Kernel 6.6+)
