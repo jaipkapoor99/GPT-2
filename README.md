@@ -4,14 +4,15 @@ A modular, production-grade PyTorch implementation of the **GPT-2 (124M)** archi
 
 ---
 
-## Key Architectural Enhancements
+## Key Architectural & CLI Features
 
-1. **FlashAttention-2 (`F.scaled_dot_product_attention`):** High-speed fused CUDA attention kernel operating on 4D tensors `(B, n_head, T, head_dim)`.
-2. **SwiGLU Gated FeedForward Network:** Replaces 2019 GELU with the modern Gated Swish activation mechanism used in LLaMA 3, Qwen 2.5, and Mistral.
+1. **FlashAttention-2 (`F.scaled_dot_product_attention`):** High-speed fused CUDA attention operating on 4D tensors `(B, n_head, T, head_dim)`.
+2. **SwiGLU Gated FeedForward Network:** Modern Gated Swish activation mechanism used in LLaMA 3, Qwen 2.5, and Mistral.
 3. **SmolLM Byte-BPE Tokenizer (`HuggingFaceTB/SmolLM-135M`):** 49,152 vocabulary size optimized for hardware matrix multiplications on NVIDIA Tensor Cores ($49,152 = 768 \times 64$).
 4. **Weight Tying:** Shares parameters between token embeddings (`wte`) and output projection (`lm_head`).
 5. **Zero-RAM Memory Mapped Dataset Loading (`np.memmap`):** Pre-tokenizes text into compact `uint16` binary shards (`shards/fineweb_shard_XXXX.bin`) and streams batches directly from disk into GPU VRAM.
-6. **Hugging Face `accelerate` & Gradient Accumulation:** Automated FP16 mixed precision and high-throughput batching.
+6. **Pre-trained Weights & Local Checkpoint Loader:** Flexible CLI flags to load pre-trained OpenAI weights (`--from-pretrained gpt2`) or resume local training (`--load-checkpoint gpt2_model.pth`).
+7. **Loss Tabulation & Visualization:** Tabulates metric rows during training, exports `loss_history.csv` & `loss_history.json`, and renders a high-res `loss_curve.png`.
 
 ---
 
@@ -20,12 +21,11 @@ A modular, production-grade PyTorch implementation of the **GPT-2 (124M)** archi
 ```
 GPT-2/
 ├── config.py             # GPT2Config dataclass
-├── model.py              # CausalSelfAttention, SwiGLUMLP, Block, & GPT2 PyTorch model
+├── model.py              # CausalSelfAttention, SwiGLUMLP, Block, & GPT2 model class
 ├── dataset.py            # Zero-RAM memmap binary dataset loader
 ├── tokenize_dataset.py   # Standalone 10B FineWeb dataset streaming pre-tokenization script
-├── train.py              # Distributed / HF Accelerate training script
+├── train.py              # Production training CLI script
 ├── generate.py           # Top-K Autoregressive text generation CLI
-├── GPT2.ipynb            # Interactive Jupyter notebook
 ├── requirements.txt      # Project dependencies
 └── README.md             # Documentation
 ```
@@ -46,9 +46,19 @@ python tokenize_dataset.py
 ```
 
 ### 3. Launch Pre-training
-Train GPT-2 (124M) using Hugging Face Accelerate:
+Train GPT-2 (124M) from scratch:
 ```bash
-python train.py
+python train.py --max-steps 3000
+```
+
+Optionally load pre-trained OpenAI weights:
+```bash
+python train.py --from-pretrained gpt2
+```
+
+Optionally load local checkpoint weights:
+```bash
+python train.py --load-checkpoint gpt2_model.pth
 ```
 
 ### 4. Text Generation
