@@ -5,11 +5,12 @@ Features:
 2. Tabulated loss metrics formatting
 3. Loss tracking saved to CSV & JSON (loss_history.csv, loss_history.json)
 4. Visual Loss Curve rendered & saved to loss_curve.png
-5. Automatic weight checkpoint saving (gpt2_model.pth)
+5. Gzip-compressed weight checkpoint saving (gpt2_model.pth.gz)
 """
 
 import argparse
 import csv
+import gzip
 import json
 import math
 import os
@@ -57,7 +58,7 @@ def main():
     parser = argparse.ArgumentParser(description="GPT-2 Pre-training Pipeline")
     parser.add_argument("--from-pretrained", type=str, default=None, choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'],
                         help="Optionally load pre-trained OpenAI weights instead of training from scratch")
-    parser.add_argument("--load-checkpoint", type=str, default=None, help="Path to local checkpoint file (e.g. gpt2_model.pth)")
+    parser.add_argument("--load-checkpoint", type=str, default=None, help="Path to local checkpoint file (e.g. gpt2_model.pth.gz)")
     parser.add_argument("--max-steps", type=int, default=3000, help="Total training steps")
     args = parser.parse_args()
 
@@ -84,7 +85,11 @@ def main():
         model = GPT2(config)
         if args.load_checkpoint and os.path.exists(args.load_checkpoint):
             accelerator.print(f"Loading local checkpoint from '{args.load_checkpoint}'...")
-            model.load_state_dict(torch.load(args.load_checkpoint, map_location="cpu"))
+            if args.load_checkpoint.endswith('.gz'):
+                with gzip.open(args.load_checkpoint, 'rb') as gf:
+                    model.load_state_dict(torch.load(gf, map_location="cpu"))
+            else:
+                model.load_state_dict(torch.load(args.load_checkpoint, map_location="cpu"))
             
     print_parameter_breakdown(model, accelerator)
     
@@ -157,12 +162,13 @@ def main():
     print_table_footer(accelerator)
     accelerator.print("\nPre-training Complete!")
     
-    # Save Checkpoint & Metrics (Main Process)
+    # Save Compressed Gzip Checkpoint & Metrics (Main Process)
     if accelerator.is_main_process:
         unwrapped = accelerator.unwrap_model(model)
-        checkpoint_path = "gpt2_model.pth"
-        torch.save(unwrapped.state_dict(), checkpoint_path)
-        accelerator.print(f"✓ Saved trained model weights to '{checkpoint_path}'")
+        checkpoint_path = "gpt2_model.pth.gz"
+        with gzip.open(checkpoint_path, "wb") as f:
+            torch.save(unwrapped.state_dict(), f)
+        accelerator.print(f"✓ Saved compressed model weights to '{checkpoint_path}'")
         
         # Save Tabular Loss Metrics (JSON & CSV)
         with open("loss_history.json", "w") as f:
