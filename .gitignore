@@ -1,9 +1,12 @@
 *.bin
 *.pt
 *.pth
-*.tar.gz
+*.gz
+*.png
+*.csv
+*.json
 shards/
 __pycache__/
 .ipynb_checkpoints/
 *.log
-fineweb_meta.json
+
