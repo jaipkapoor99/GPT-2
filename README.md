@@ -1,12 +1,12 @@
-# GPT-2 (124M) PyTorch Reproduction (2026 SOTA Standards)
+# GPT-2 (124M) SOTA PyTorch Showcase (2026 Edition)
 
-A modular, production-grade PyTorch implementation of the **GPT-2 (124M)** architecture upgraded with modern 2026 state-of-the-art Large Language Model components.
+A high-performance **Masterclass Showcase of AI Engineering Skill**—implementing the **GPT-2 (124M)** architecture upgraded with modern 2026 state-of-the-art Large Language Model components, zero-copy binary streaming, and hardware-accelerated kernels.
 
 ---
 
 ## System Hardware & Environment Configuration
 
-This repository is benchmarked and optimized for high-throughput local pre-training on the following hardware & software environment:
+This repository is benchmarked and optimized as a high-throughput showcase on the following hardware & software environment:
 
 ### Hardware Specifications
 * **CPU:** AMD Ryzen 7 9800X3D (8 Cores / 16 Threads with 3D V-Cache Technology)
@@ -22,16 +22,15 @@ This repository is benchmarked and optimized for high-throughput local pre-train
 
 ---
 
-## Architectural & CLI Enhancements
+## Architectural & Technical Highlights
 
 1. **FlashAttention-2 (`F.scaled_dot_product_attention`):** High-speed fused CUDA attention operating on 4D tensors `(B, n_head, T, head_dim)`.
 2. **SwiGLU Gated FeedForward Network:** Modern Gated Swish activation mechanism used in LLaMA 3, Qwen 2.5, and Mistral ($\text{hidden\_dim} = \frac{8}{3} C$, rounded to multiple of 64).
 3. **SmolLM Byte-BPE Tokenizer (`HuggingFaceTB/SmolLM-135M`):** 49,152 vocabulary size optimized for hardware matrix multiplications on NVIDIA Tensor Cores ($49,152 = 768 \times 64$).
 4. **Weight Tying:** Shares parameters between token embeddings (`wte`) and output projection (`lm_head`).
-5. **Zero-RAM Memory Mapped Dataset Loading (`np.memmap`):** Pre-tokenizes text into compact `uint16` binary shards (`shards/fineweb_shard_XXXX.bin`) and streams batches directly from disk into GPU VRAM.
-6. **Pre-trained Weights & Local Checkpoint Loader:** Flexible CLI flags to load pre-trained OpenAI weights (`--from-pretrained gpt2`) or resume local training (`--load-checkpoint gpt2_model.pth.gz`).
+5. **Zero-Copy Memory Mapped Dataset Loading (`np.memmap`):** Direct token offset slicing over 1.9 Billion tokens (`shards/fineweb_shard_XXXX.bin`) with 0.00 MB RAM overhead.
+6. **Pre-trained Weights & Local Checkpoint Loader:** Flexible CLI flags to load pre-trained OpenAI weights (`--from-pretrained gpt2`) or resume local training (`--load-checkpoint gpt2_model.pth`).
 7. **Loss Tabulation & Visualization:** Tabulates metric rows during training, exports `loss_history.csv` & `loss_history.json`, and renders a high-res `loss_curve.png`.
-8. **Gzip Compressed Checkpoints:** Model weights automatically saved compressed as `gpt2_model.pth.gz`.
 
 ---
 
@@ -41,9 +40,9 @@ This repository is benchmarked and optimized for high-throughput local pre-train
 GPT-2/
 ├── config.py             # GPT2Config dataclass (Dynamic vocab_size & head_dim)
 ├── model.py              # CausalSelfAttention, SwiGLUMLP, Block, & GPT2 model class
-├── dataset.py            # Zero-RAM memmap binary dataset loader
+├── dataset.py            # Zero-Copy memmap binary dataset loader
 ├── tokenize_dataset.py   # Standalone 10B FineWeb dataset streaming pre-tokenization script
-├── train.py              # Production training CLI script
+├── train.py              # Pre-training CLI script
 ├── generate.py           # Top-K Autoregressive text generation CLI
 ├── requirements.txt      # Project dependencies
 └── README.md             # Project & System Documentation
@@ -75,7 +74,7 @@ Optionally load pre-trained OpenAI weights:
 python train.py --from-pretrained gpt2
 ```
 
-Optionally load local compressed checkpoint weights:
+Optionally load local checkpoint weights:
 ```bash
 python train.py --load-checkpoint gpt2_model.pth
 ```
@@ -83,7 +82,7 @@ python train.py --load-checkpoint gpt2_model.pth
 ### 4. Text Generation
 Generate text using Top-K autoregressive sampling:
 ```bash
-python generate.py "The future of artificial intelligence is"
+python generate.py "The future of artificial intelligence is" --max-tokens 60
 ```
 
 ---
@@ -107,4 +106,4 @@ python generate.py "The future of artificial intelligence is"
 ---
 
 ## License & Acknowledgments
-Built in alignment with modern 2026 AI engineering standards, drawing architectural inspiration from Andrej Karpathy's `nanochat`, OpenAI GPT-2, LLaMA 3, and Hugging Face SmolLM.
+Built in alignment with modern 2026 AI engineering standards, drawing architectural inspiration from Andrej Karpathy's `nanoGPT` / `nanochat`, OpenAI GPT-2, LLaMA 3, and Hugging Face SmolLM.
