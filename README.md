@@ -8,9 +8,10 @@ A high-performance **Masterclass Showcase of AI Engineering Skill**—implementi
 
 This repository is benchmarked and optimized as a high-throughput showcase on the following hardware & software environment:
 
-### Hardware Specifications
+### Hardware Specifications & Memory Footprint
 * **CPU:** AMD Ryzen 7 9800X3D (8 Cores / 16 Threads with 3D V-Cache Technology)
 * **GPU:** NVIDIA GeForce RTX 5090 (32GB VRAM, 600W Power Limit)
+* **VRAM Consumption:** **~28 GB VRAM** active allocation under current pre-training configuration ($B = 16, T = 1024$, Grad Accum $= 8$).
 * **GPU Performance:** ~576W active power draw, 98% compute utilization, peak 71°C thermal performance under full load.
 * **Host Architecture:** WSL2 on Ubuntu 24.04 LTS (Linux Kernel 6.6+)
 
@@ -63,7 +64,7 @@ Stream FineWeb documents into 100M token binary shards:
 python tokenize_dataset.py
 ```
 
-### 3. Launch Pre-training
+### 3. Launch Pre-training (~28 GB VRAM Peak)
 Train GPT-2 (124M) from scratch:
 ```bash
 python train.py --max-steps 3000
