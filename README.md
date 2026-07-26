@@ -1,29 +1,35 @@
-# GPT-2 (124M) SOTA PyTorch Showcase (2026 Edition)
+---
+language:
+- en
+license: mit
+library_name: pytorch
+tags:
+- gpt2
+- causal-lm
+- flash-attention
+- swiglu
+- fineweb
+- smollm
+metrics:
+- loss
+pipeline_tag: text-generation
+widget:
+- text: "The future of artificial intelligence is"
+- text: "In the modern era of deep learning,"
+---
 
-A high-performance **Masterclass Showcase of AI Engineering Skill**—implementing the **GPT-2 (124M)** architecture upgraded with modern 2026 state-of-the-art Large Language Model components, zero-copy binary streaming, and hardware-accelerated kernels.
+# GPT-2 (124M) 2026 SOTA PyTorch Model Card
+
+A high-performance **Masterclass Showcase of AI Engineering Skill**—re-implementing the **GPT-2 (124M)** architecture upgraded with modern 2026 state-of-the-art Large Language Model components, zero-copy binary dataset streaming, and hardware-accelerated kernels.
+
+* **Repository:** [https://huggingface.co/jaipkapoor99/gpt2-2026-sota](https://huggingface.co/jaipkapoor99/gpt2-2026-sota)
+* **Architecture:** GPT-2 (124M) with SwiGLU Gated MLPs & FlashAttention-2
+* **Dataset:** FineWeb 10BT Sample (`HuggingFaceFW/fineweb`)
+* **Tokenizer:** SmolLM Byte-BPE (`HuggingFaceTB/SmolLM-135M` - 49,152 Vocab Size)
 
 ---
 
-## System Hardware & Environment Configuration
-
-This repository is benchmarked and optimized as a high-throughput showcase on the following hardware & software environment:
-
-### Hardware Specifications & Memory Footprint
-* **CPU:** AMD Ryzen 7 9800X3D (8 Cores / 16 Threads with 3D V-Cache Technology)
-* **GPU:** NVIDIA GeForce RTX 5090 (32GB VRAM, 600W Power Limit)
-* **VRAM Consumption:** **~28 GB VRAM** active allocation under current pre-training configuration ($B = 16, T = 1024$, Grad Accum $= 8$).
-* **GPU Performance:** ~576W active power draw, 98% compute utilization, peak 71°C thermal performance under full load.
-* **Host Architecture:** WSL2 on Ubuntu 24.04 LTS (Linux Kernel 6.6+)
-
-### Software & AI Stack
-* **CUDA / Driver Version:** CUDA 13.3 / Driver Version 610.43.02
-* **Python Runtime:** Python 3.13.11 (Miniconda 26.1.1)
-* **PyTorch Ecosystem:** PyTorch 2.6+ (CUDA 12.8/13.3 enabled)
-* **Hugging Face Stack:** `transformers` v5.14.1, `accelerate` v1.14.0, `datasets` v5.0.0
-
----
-
-## Architectural & Technical Highlights
+## Key Architectural & Technical Highlights
 
 1. **FlashAttention-2 (`F.scaled_dot_product_attention`):** High-speed fused CUDA attention operating on 4D tensors `(B, n_head, T, head_dim)`.
 2. **SwiGLU Gated FeedForward Network:** Modern Gated Swish activation mechanism used in LLaMA 3, Qwen 2.5, and Mistral ($\text{hidden\_dim} = \frac{8}{3} C$, rounded to multiple of 64).
@@ -69,6 +75,25 @@ We’ve been in the industry for more than 10 years with the latest technology, 
 The 100% increase in the average American economy has caused more than 30% of Americans to lose their jobs.
 One of the most important things in life is
 ```
+
+---
+
+## System Hardware & Environment Configuration
+
+This repository was benchmarked and trained on the following hardware & software environment:
+
+### Hardware Specifications & Memory Footprint
+* **CPU:** AMD Ryzen 7 9800X3D (8 Cores / 16 Threads with 3D V-Cache Technology)
+* **GPU:** NVIDIA GeForce RTX 5090 (32GB VRAM, 600W Power Limit)
+* **VRAM Consumption:** **~28 GB VRAM** active allocation under current pre-training configuration ($B = 16, T = 1024$, Grad Accum $= 8$).
+* **GPU Performance:** ~576W active power draw, 98% compute utilization, peak 71°C thermal performance under full load.
+* **Host Architecture:** WSL2 on Ubuntu 24.04 LTS (Linux Kernel 6.6+)
+
+### Software & AI Stack
+* **CUDA / Driver Version:** CUDA 13.3 / Driver Version 610.43.02
+* **Python Runtime:** Python 3.13.11 (Miniconda 26.1.1)
+* **PyTorch Ecosystem:** PyTorch 2.6+ (CUDA 12.8/13.3 enabled)
+* **Hugging Face Stack:** `transformers` v5.14.1, `accelerate` v1.14.0, `datasets` v5.0.0
 
 ---
 
