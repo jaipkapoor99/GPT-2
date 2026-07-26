@@ -35,18 +35,39 @@ This repository is benchmarked and optimized as a high-throughput showcase on th
 
 ---
 
-## Directory Structure
+## Pre-Training Loss Progression (3,000 Steps / 393M Tokens)
 
+```text
++-------+------------+-----------+-----------+
+| Step  | Train Loss | Dev Loss  |    LR     |
++-------+------------+-----------+-----------+
+|   250 |    5.7479  |   5.7740  | 6.00e-04  |
+|   500 |    5.0730  |   4.9425  | 5.85e-04  |
+|   750 |    4.6465  |   4.4856  | 5.50e-04  |
+|  1000 |    4.3635  |   4.2718  | 4.99e-04  |
+|  1250 |    4.2426  |   4.1470  | 4.34e-04  |
+|  1500 |    4.0342  |   4.0543  | 3.61e-04  |
+|  1750 |    3.8950  |   3.9819  | 2.85e-04  |
+|  2000 |    4.0211  |   3.9269  | 2.13e-04  |
+|  2250 |    3.8842  |   3.8822  | 1.50e-04  |
+|  2500 |    3.9335  |   3.8500  | 1.02e-04  |
+|  2750 |    3.8288  |   3.8276  | 7.06e-05  |
+|  3000 |    3.8248  |   3.8123  | 6.00e-05  |
++-------+------------+-----------+-----------+
 ```
-GPT-2/
-├── config.py             # GPT2Config dataclass (Dynamic vocab_size & head_dim)
-├── model.py              # CausalSelfAttention, SwiGLUMLP, Block, & GPT2 model class
-├── dataset.py            # Zero-Copy memmap binary dataset loader
-├── tokenize_dataset.py   # Standalone 10B FineWeb dataset streaming pre-tokenization script
-├── train.py              # Pre-training CLI script
-├── generate.py           # Top-K Autoregressive text generation CLI
-├── requirements.txt      # Project dependencies
-└── README.md             # Project & System Documentation
+
+---
+
+## Sample Model Output (Authentic 3,000-Step Checkpoint Generation)
+
+**Prompt:** `"The future of artificial intelligence is"`
+
+```text
+The future of artificial intelligence is a good thing, but it is not that easy.
+We’ve been in the industry for more than 10 years with the latest technology, and we’ve got a few keynotes.
+
+The 100% increase in the average American economy has caused more than 30% of Americans to lose their jobs.
+One of the most important things in life is
 ```
 
 ---
@@ -83,7 +104,7 @@ python train.py --load-checkpoint gpt2_model.pth
 ### 4. Text Generation
 Generate text using Top-K autoregressive sampling:
 ```bash
-python generate.py "The future of artificial intelligence is" --max-tokens 60
+python generate.py "The future of artificial intelligence is" --max-tokens 80
 ```
 
 ---
