@@ -39,24 +39,31 @@ def main():
     )
 
     print("\n2. Uploading Safetensors weights & HF Transformers config files...")
-    api.upload_file(
-        path_or_fileobj=os.path.join(safetensors_dir, "model.safetensors"),
-        path_in_repo="model.safetensors",
-        repo_id=repo_id,
-        repo_type="model"
-    )
-    api.upload_file(
-        path_or_fileobj=os.path.join(safetensors_dir, "config.json"),
-        path_in_repo="config.json",
-        repo_id=repo_id,
-        repo_type="model"
-    )
-    api.upload_file(
-        path_or_fileobj=os.path.join(safetensors_dir, "generation_config.json"),
-        path_in_repo="generation_config.json",
-        repo_id=repo_id,
-        repo_type="model"
-    )
+    safetensors_file = os.path.join(safetensors_dir, "model.safetensors")
+    config_file = os.path.join(safetensors_dir, "config.json")
+    gen_config_file = os.path.join(safetensors_dir, "generation_config.json")
+    
+    if os.path.exists(safetensors_file):
+        api.upload_file(
+            path_or_fileobj=safetensors_file,
+            path_in_repo="model.safetensors",
+            repo_id=repo_id,
+            repo_type="model"
+        )
+    if os.path.exists(config_file):
+        api.upload_file(
+            path_or_fileobj=config_file,
+            path_in_repo="config.json",
+            repo_id=repo_id,
+            repo_type="model"
+        )
+    if os.path.exists(gen_config_file):
+        api.upload_file(
+            path_or_fileobj=gen_config_file,
+            path_in_repo="generation_config.json",
+            repo_id=repo_id,
+            repo_type="model"
+        )
     
     print(f"\n✓ UPLOAD COMPLETE!")
     print(f"Your model (safetensors) and codebase are live at: https://huggingface.co/{repo_id}")
