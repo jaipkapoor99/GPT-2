@@ -46,7 +46,6 @@ Features **Rotary Position Embeddings (RoPE)**, **Muon Newton-Schulz Matrix Opti
 ├── dataset.py            # Zero-Copy Memmap Sharded DataLoader
 ├── model.py              # GPT-2 Architecture (FlashAttention-2, SwiGLU FFN, Weight Tying)
 ├── train.py              # Distributed Pre-training Loop (Accelerate, bf16, torch.compile)
-├── eval.py               # Benchmark Suite (Perplexity, Zero-shot HellaSwag, Throughput)
 ├── sample.py             # Autoregressive Generation CLI with Anti-Repetition Safeguards
 ├── generate.py           # Custom PyTorch Autoregressive Text Generation CLI
 ├── test_hf_generate.py   # Hugging Face Transformers + Safetensors Generation CLI
@@ -132,14 +131,14 @@ Or specify a custom Accelerate checkpoint directory / PyTorch weights file:
 accelerate launch train.py --load-checkpoint accelerate_checkpoint --max-steps 20000
 ```
 
-### 5. Benchmark & Zero-Shot Evaluation Suite
-Evaluate validation loss/perplexity, zero-shot HellaSwag log-likelihood scoring, and autoregressive generation throughput using native Accelerate or Hugging Face `transformers`:
+### 5. Standard Zero-Shot Benchmarking (`lm-evaluation-harness`)
+Evaluate HellaSwag, ARC-Easy, LAMBADA, and MMLU directly on your exported Hugging Face model directory or Hub repository:
 ```bash
-# Evaluate using Hugging Face transformers AutoModelForCausalLM
-python eval.py --use-hf --repo-id jaipkapoor99/gpt2-2026-sota
+# Evaluate local model directory
+lm_eval --model hf --model_args pretrained=gpt2-fineweb-124m --tasks hellaswag,arc_easy,lambada_openai --device cuda
 
-# Evaluate local Accelerate checkpoint
-python eval.py --load-checkpoint accelerate_checkpoint --eval-batches 50
+# Evaluate published Hugging Face Hub repository
+lm_eval --model hf --model_args pretrained=jaipkapoor99/gpt2-2026-sota --tasks hellaswag,arc_easy --device cuda
 ```
 
 ### 6. Interactive Text Generation with Anti-Repetition Safeguards
