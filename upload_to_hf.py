@@ -52,11 +52,11 @@ def main():
     # 2. Upload Model Card README
     print("\n2. Uploading Model Card README...")
     api.upload_file(
-        path_or_fileobj=os.path.join(local_dir, "README.md"),
+        path_or_fileobj=os.path.join(local_dir, "MODEL_CARD.md"),
         path_in_repo="README.md",
         repo_id=repo_id,
         repo_type="model",
-        commit_message="Upload model card README.md"
+        commit_message="Upload model card MODEL_CARD.md"
     )
     
     print(f"\n✓ UPLOAD COMPLETE!")
