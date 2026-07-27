@@ -1,57 +1,48 @@
 """
-Hugging Face Transformers Text Generation Script
-Loads model weights directly from Hugging Face Hub (safetensors format) using the Hugging Face `transformers` library.
+Hugging Face Transformers Remote Model Inference Script
+Fetches the entire model (code, config, and safetensors weights) directly from Hugging Face Hub online.
+Anybody on any machine can run this script to test the model!
 """
 
-import os
 import argparse
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 def main():
-    parser = argparse.ArgumentParser(description="Hugging Face Transformers Model Inference")
-    parser.add_argument("prompt", type=str, nargs="?", default="The spice must flow because", help="Prompt text for generation")
+    parser = argparse.ArgumentParser(description="Hugging Face Remote Model Inference")
+    parser.add_argument("prompt", type=str, nargs="?", default="The future of artificial intelligence is", help="Prompt text for generation")
     parser.add_argument("--repo-id", type=str, default="jaipkapoor99/gpt2-2026-sota", help="Hugging Face repo ID")
     parser.add_argument("--max-tokens", type=int, default=60, help="Maximum new tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
-    parser.add_argument("--top-k", type=int, default=50, help="Top-k sampling parameter")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"=== HUGGING FACE TRANSFORMERS INFERENCE ===")
-    print(f"Loading safetensors model from HF Hub: https://huggingface.co/{args.repo_id}")
+    print(f"=== HUGGING FACE REMOTE MODEL INFERENCE ===")
+    print(f"Fetching full model & tokenizer online from Hugging Face Hub: https://huggingface.co/{args.repo_id}")
     
-    from config import GPT2Config
-    from model import GPT2
-    from safetensors.torch import load_file
-    
-    # Load tokenizer
+    # Fetch full model architecture & weights online from Hugging Face Model Hub
+    model = AutoModelForCausalLM.from_pretrained(args.repo_id, trust_remote_code=True, force_download=True).to(device)
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
     
-    # Load custom GPT2 2026 SOTA architecture
-    config = GPT2Config(vocab_size=tokenizer.vocab_size)
-    model = GPT2(config).to(device)
-    
-    if os.path.exists("gpt2-fineweb-124m/model.safetensors"):
-        state_dict = load_file("gpt2-fineweb-124m/model.safetensors")
-        clean_state = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-        model.load_state_dict(clean_state, strict=False)
-        print("✓ Loaded custom 2026 SOTA model weights successfully.")
-    
-    print(f"Model loaded on [{device.upper()}].")
+    print(f"✓ Remote model fetched and loaded on [{device.upper()}].")
     print(f"\nPrompt: '{args.prompt}'")
     
-    # Autoregressive generation with Anti-Repetition Penalty
-    from sample import sample_sequence
-    generated_text = sample_sequence(
-        model, tokenizer, args.prompt,
-        max_new_tokens=args.max_tokens,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        repetition_penalty=1.15,
-        device=device
-    )
-    print("\n--- GENERATED TEXT (2026 SOTA GPT-2) ---")
+    # Tokenize input
+    inputs = tokenizer(args.prompt, return_tensors="pt").to(device)
+    
+    # Generate text using standard Hugging Face generate pipeline
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=args.max_tokens,
+            do_sample=True,
+            temperature=args.temperature,
+            repetition_penalty=1.15,
+            pad_token_id=tokenizer.eos_token_id
+        )
+    
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    print("\n--- GENERATED TEXT (FETCHED ONLINE FROM HUGGING FACE) ---")
     print(generated_text)
 
 if __name__ == "__main__":

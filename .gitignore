@@ -5,13 +5,12 @@ fineweb_tokens.bin
 
 # Model Weights Checkpoints
 *.pth
-*.safetensors
 *.pt
-gpt2-fineweb-124m/
+*.safetensors
 accelerate_checkpoint/
 
 # Logs & Cache
 __pycache__/
 .ipynb_checkpoints/
 *.log
-
+gpt2-fineweb-124m/
