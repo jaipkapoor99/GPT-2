@@ -1,12 +1,13 @@
 *.bin
 *.pt
 *.pth
+*.safetensors
 *.gz
 *.png
 *.csv
 *.json
 shards/
+gpt2-fineweb-124m/
 __pycache__/
 .ipynb_checkpoints/
 *.log
-

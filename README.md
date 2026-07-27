@@ -1,158 +1,83 @@
----
-language:
-- en
-license: mit
-library_name: pytorch
-tags:
-- gpt2
-- causal-lm
-- flash-attention
-- swiglu
-- fineweb
-- smollm
-metrics:
-- loss
-pipeline_tag: text-generation
-widget:
-- text: "The future of artificial intelligence is"
-- text: "In the modern era of deep learning,"
----
+# GPT-2 (124M) Pre-training Pipeline from Scratch
 
-# GPT-2 (124M) 2026 SOTA PyTorch Model Card
+A high-performance PyTorch pre-training implementation of **GPT-2 (124M parameters)** trained on the **FineWeb-Edu** dataset from scratch, following Andrej Karpathy's *Neural Networks: Zero to Hero* course.
 
-A high-performance **Masterclass Showcase of AI Engineering Skill**—re-implementing the **GPT-2 (124M)** architecture upgraded with modern 2026 state-of-the-art Large Language Model components, zero-copy binary dataset streaming, and hardware-accelerated kernels.
-
-* **Repository:** [https://huggingface.co/jaipkapoor99/gpt2-2026-sota](https://huggingface.co/jaipkapoor99/gpt2-2026-sota)
-* **Architecture:** GPT-2 (124M) with SwiGLU Gated MLPs & FlashAttention-2
-* **Dataset:** FineWeb 10BT Sample (`HuggingFaceFW/fineweb`)
-* **Tokenizer:** SmolLM Byte-BPE (`HuggingFaceTB/SmolLM-135M` - 49,152 Vocab Size)
+Features a **Zero-Copy Memory-Mapped Dataset pipeline**, **Hugging Face Accelerate integration with `bf16` mixed precision**, and **fused FlashAttention kernels**.
 
 ---
 
-## Key Architectural & Technical Highlights
-
-1. **FlashAttention-2 (`F.scaled_dot_product_attention`):** High-speed fused CUDA attention operating on 4D tensors `(B, n_head, T, head_dim)`.
-2. **SwiGLU Gated FeedForward Network:** Modern Gated Swish activation mechanism used in LLaMA 3, Qwen 2.5, and Mistral ($\text{hidden\_dim} = \frac{8}{3} C$, rounded to multiple of 64).
-3. **SmolLM Byte-BPE Tokenizer (`HuggingFaceTB/SmolLM-135M`):** 49,152 vocabulary size optimized for hardware matrix multiplications on NVIDIA Tensor Cores ($49,152 = 768 \times 64$).
-4. **Weight Tying:** Shares parameters between token embeddings (`wte`) and output projection (`lm_head`).
-5. **Zero-Copy Memory Mapped Dataset Loading (`np.memmap`):** Direct token offset slicing over 1.9 Billion tokens (`shards/fineweb_shard_XXXX.bin`) with 0.00 MB RAM overhead.
-6. **Pre-trained Weights & Local Checkpoint Loader:** Flexible CLI flags to load pre-trained OpenAI weights (`--from-pretrained gpt2`) or resume local training (`--load-checkpoint gpt2_model.pth`).
-7. **Loss Tabulation & Vector Visualization:** Tabulates metric rows during training, exports `loss_history.csv` & `loss_history.json`, and renders a crisp vector `loss_curve.svg`.
+## 🚀 Key Features & Performance
+- **Zero-Copy Data Loader:** Direct memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead.
+- **Hardware Acceleration:** Native PyTorch `bfloat16` precision and FlashAttention-2 integration optimized for NVIDIA RTX 50-series (Blackwell) GPUs.
+- **Hugging Face Hub Integration:** Direct checkpoint conversion and hosting on Hugging Face Hub (`jaipkapoor99/gpt2-124m-fineweb`).
+- **Optimization Strategy:** Cosine learning rate decay with linear warmup, AdamW ($\beta_1 = 0.9, \beta_2 = 0.95$, weight decay $0.1$), and gradient norm clipping.
 
 ---
 
-## Pre-Training Loss Progression (3,000 Steps / 393M Tokens)
+## 📊 Pre-training Architecture & Hyperparameters
 
-![GPT-2 Pre-Training Loss Curve](loss_curve.svg)
+| Parameter | Value |
+| :--- | :--- |
+| **Model Size** | 123,545,088 parameters (124M) |
+| **Layers / Heads / Embed Dim** | 12 layers / 12 heads / 768 dim |
+| **Context Window ($T$)** | 1,024 tokens |
+| **Micro-Batch Size ($B$)** | 16 |
+| **Gradient Accumulation** | 8 steps (Effective Batch = 128 sequences / 131,072 tokens per step) |
+| **Precision** | BFloat16 (`bf16`) |
+| **Dropout** | 0.0 |
+| **Max Learning Rate** | $6 \times 10^{-4}$ |
+| **Min Learning Rate** | $6 \times 10^{-5}$ |
+| **Warmup Steps** | 200 |
+
+---
+
+## 🛠️ Project Structure
 
 ```text
-+-------+------------+-----------+-----------+
-| Step  | Train Loss | Dev Loss  |    LR     |
-+-------+------------+-----------+-----------+
-|   250 |    5.7479  |   5.7740  | 6.00e-04  |
-|   500 |    5.0730  |   4.9425  | 5.85e-04  |
-|   750 |    4.6465  |   4.4856  | 5.50e-04  |
-|  1000 |    4.3635  |   4.2718  | 4.99e-04  |
-|  1250 |    4.2426  |   4.1470  | 4.34e-04  |
-|  1500 |    4.0342  |   4.0543  | 3.61e-04  |
-|  1750 |    3.8950  |   3.9819  | 2.85e-04  |
-|  2000 |    4.0211  |   3.9269  | 2.13e-04  |
-|  2250 |    3.8842  |   3.8822  | 1.50e-04  |
-|  2500 |    3.9335  |   3.8500  | 1.02e-04  |
-|  2750 |    3.8288  |   3.8276  | 7.06e-05  |
-|  3000 |    3.8248  |   3.8123  | 6.00e-05  |
-+-------+------------+-----------+-----------+
+├── config.py             # Hyperparameters & GPT2Config dataclass
+├── dataset.py            # Zero-Copy Memmap Sharded DataLoader
+├── model.py              # GPT-2 Architecture (Attention, MLP, Weight Tying)
+├── train.py              # Main Distributed Pre-training Loop (Accelerate, Logging, Evaluation)
+├── tokenize_dataset.py   # FineWeb-Edu tokenization into binary shards
+├── .gitignore            # Clean git exclusion rules
+└── README.md             # Project documentation
 ```
 
 ---
 
-## Sample Model Output (Authentic 3,000-Step Checkpoint Generation)
+## 📦 Using Pre-trained Weights from Hugging Face
 
-**Prompt:** `"The future of artificial intelligence is"`
+The trained model checkpoint is available on the Hugging Face Hub:
 
-```text
-The future of artificial intelligence is a good thing, but it is not that easy.
-We’ve been in the industry for more than 10 years with the latest technology, and we’ve got a few keynotes.
+```python
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-The 100% increase in the average American economy has caused more than 30% of Americans to lose their jobs.
-One of the most important things in life is
+model_id = "jaipkapoor99/gpt2-124m-fineweb"
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+model = GPT2LMHeadModel.from_pretrained(model_id)
+
+prompt = "Ancient Rome was"
+inputs = tokenizer(prompt, return_tensors="pt")
+outputs = model.generate(**inputs, max_new_tokens=50, do_sample=True, top_k=50, top_p=0.95)
+
+print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 ```
 
 ---
 
-## System Hardware & Environment Configuration
+## 🏃 Running Training Locally
 
-This repository was benchmarked and trained on the following hardware & software environment:
+1. **Install Dependencies:**
+   ```bash
+   pip install torch transformers accelerate datasets numpy matplotlib tqdm
+   ```
 
-### Hardware Specifications & Memory Footprint
-* **CPU:** AMD Ryzen 7 9800X3D (8 Cores / 16 Threads with 3D V-Cache Technology)
-* **GPU:** NVIDIA GeForce RTX 5090 (32GB VRAM, 600W Power Limit)
-* **VRAM Consumption:** **~28 GB VRAM** active allocation under current pre-training configuration ($B = 16, T = 1024$, Grad Accum $= 8$).
-* **GPU Performance:** ~576W active power draw, 98% compute utilization, peak 71°C thermal performance under full load.
-* **Host Architecture:** WSL2 on Ubuntu 24.04 LTS (Linux Kernel 6.6+)
+2. **Tokenize Dataset:**
+   ```bash
+   python tokenize_dataset.py
+   ```
 
-### Software & AI Stack
-* **CUDA / Driver Version:** CUDA 13.3 / Driver Version 610.43.02
-* **Python Runtime:** Python 3.13.11 (Miniconda 26.1.1)
-* **PyTorch Ecosystem:** PyTorch 2.6+ (CUDA 12.8/13.3 enabled)
-* **Hugging Face Stack:** `transformers` v5.14.1, `accelerate` v1.14.0, `datasets` v5.0.0
-
----
-
-## Quickstart Guide
-
-### 1. Installation
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Pre-tokenize Dataset Shards
-Stream FineWeb documents into 100M token binary shards:
-```bash
-python tokenize_dataset.py
-```
-
-### 3. Launch Pre-training (~28 GB VRAM Peak)
-Train GPT-2 (124M) from scratch:
-```bash
-python train.py --max-steps 3000
-```
-
-Optionally load pre-trained OpenAI weights:
-```bash
-python train.py --from-pretrained gpt2
-```
-
-Optionally load local checkpoint weights:
-```bash
-python train.py --load-checkpoint gpt2_model.pth
-```
-
-### 4. Text Generation
-Generate text using Top-K autoregressive sampling:
-```bash
-python generate.py "The future of artificial intelligence is" --max-tokens 80
-```
-
----
-
-## Detailed Parameter Breakdown (123,545,088 Total)
-
-```text
-===========================================
-  GPT-2 (124M) DETAILED PARAMETER BREAKDOWN
-===========================================
-  Token Embeddings (wte)    : 37,748,736 (30.6%)
-  Position Embeddings (wpe) : 786,432 (0.6%)
-  12 Transformer Blocks (h) : 85,008,384 (68.8%)
-  Final LayerNorm (ln_f)    : 1,536 (<0.1%)
-  Output LM Head (lm_head)  : 0 (Weight Tied with wte)
--------------------------------------------
-  TOTAL TRAINABLE PARAMETERS: 123,545,088
-===========================================
-```
-
----
-
-## License & Acknowledgments
-Built in alignment with modern 2026 AI engineering standards, drawing architectural inspiration from Andrej Karpathy's `nanoGPT` / `nanochat`, OpenAI GPT-2, LLaMA 3, and Hugging Face SmolLM.
+3. **Start Pre-training:**
+   ```bash
+   python train.py --max-steps 10000
+   ```
