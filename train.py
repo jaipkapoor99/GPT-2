@@ -59,13 +59,14 @@ def main():
                         help="Optionally load pre-trained OpenAI weights instead of training from scratch")
     parser.add_argument("--resume", action="store_true", help="Resume training using Accelerate state or local 'gpt2_model.pth'")
     parser.add_argument("--load-checkpoint", type=str, default=None, help="Path to local checkpoint file or Accelerate checkpoint directory")
+    parser.add_argument("--gradient-checkpointing", action="store_true", help="Enable activation checkpointing for ~60% VRAM memory savings")
     parser.add_argument("--max-steps", type=int, default=3000, help="Total training steps")
     args = parser.parse_args()
 
     GRAD_ACCUM_STEPS = 8
     accelerator = Accelerator(mixed_precision="bf16", gradient_accumulation_steps=GRAD_ACCUM_STEPS)
     
-    config = GPT2Config(max_steps=args.max_steps)
+    config = GPT2Config(max_steps=args.max_steps, gradient_checkpointing=args.gradient_checkpointing)
     effective_batch = config.B * GRAD_ACCUM_STEPS
     tokens_per_step = effective_batch * config.T
     
@@ -75,6 +76,7 @@ def main():
     accelerator.print(f"  Tokens / Step       : {tokens_per_step:,}")
     accelerator.print(f"  Total Steps         : {config.max_steps:,}")
     accelerator.print(f"  LR Schedule         : WSD (Warmup-Stable-Decay)")
+    accelerator.print(f"  Grad Checkpointing  : {'ENABLED (~60% VRAM savings)' if config.gradient_checkpointing else 'DISABLED'}")
     
     train_loader, dev_loader, _ = get_dataloaders(config, accelerator)
     

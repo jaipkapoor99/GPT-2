@@ -23,6 +23,7 @@ class GPT2Config:
     warmup_steps: int = 200     # Warmup steps
     max_steps: int = 10000      # Total training steps (1.31 Billion tokens)
     eval_interval: int = 250    # Evaluate dev loss every 250 steps
+    gradient_checkpointing: bool = False # Activation checkpointing for memory optimization
     vocab_size: Optional[int] = None # Dynamically populated from metadata or tokenizer
     head_dim: int = field(init=False)
 
