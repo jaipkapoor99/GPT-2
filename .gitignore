@@ -7,7 +7,7 @@ fineweb_tokens.bin
 *.pth
 *.safetensors
 *.pt
-gpt2-fineweb-124m/*.safetensors
+gpt2-fineweb-124m/
 
 # Logs & Cache
 __pycache__/
