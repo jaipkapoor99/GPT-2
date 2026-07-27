@@ -185,7 +185,8 @@ def main():
                     param_group['lr'] = 0.04 * (lr / config.learning_rate)
                 
             with accelerator.accumulate(model):
-                logits, loss = model(xb, yb)
+                with accelerator.autocast():
+                    logits, loss = model(xb, yb)
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), 1.0)
