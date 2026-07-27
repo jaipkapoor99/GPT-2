@@ -59,7 +59,6 @@ Evaluated using **`lm-evaluation-harness`** (`lm_eval`):
 ├── model.py              # GPT-2 Architecture (FlashAttention-2, SwiGLU FFN, Weight Tying)
 ├── train.py              # Distributed Pre-training Loop (Accelerate, bf16, torch.compile)
 ├── sample.py             # Autoregressive Generation CLI with Anti-Repetition Safeguards
-├── generate.py           # Custom PyTorch Autoregressive Text Generation CLI
 ├── test_hf_generate.py   # Hugging Face Transformers + Safetensors Generation CLI
 ├── upload_to_hf.py       # Automated Hugging Face Model Hub Uploader
 ├── tokenize_dataset.py   # FineWeb dataset tokenization into binary shards
