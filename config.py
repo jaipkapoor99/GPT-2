@@ -11,7 +11,7 @@ from typing import Optional
 
 @dataclass
 class GPT2Config:
-    B: int = 16                 # Micro-batch size per pass
+    B: int = 16                 # Micro-batch size per pass (65k tokens/step with grad accum 4)
     T: int = 1024               # Time / Sequence length (T)
     C: int = 768                # Channels / Embedding dimension (C)
     n_head: int = 12            # Number of self-attention query heads

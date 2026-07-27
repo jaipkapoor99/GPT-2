@@ -24,18 +24,18 @@ Features **Rotary Position Embeddings (RoPE)**, **Muon Newton-Schulz Matrix Opti
 
 | Parameter | Value | Description |
 | :--- | :--- | :--- |
-| **Model Parameters** | 114,051,840 (114M) | GQA + Bias-Free SOTA 124M scale |
+| **Model Parameters** | 114,053,376 (114M) | GQA + Bias-Free SOTA 124M scale |
 | **Layers / Query Heads / KV Heads** | 12 layers / 12 Q-heads / 4 KV-heads | GQA Transformer layout ($C=768, n_{head}=12, n_{kv\_head}=4$) |
 | **Positional Embedding** | RoPE (Rotary) | Dynamic frequency base ($10,000$) |
 | **FFN Activation** | SwiGLU | Multiples of 64 Tensor-Core aligned |
 | **Normalization** | RMSNorm | $\epsilon=10^{-5}$ |
 | **Context Window ($T$)** | 1,024 tokens | Extendable sequence length |
 | **Micro-Batch Size ($B$)** | 16 | Per-GPU micro-batch size |
-| **Gradient Accumulation** | 8 steps | Effective batch size = 128 sequences (131,072 tokens/step) |
+| **Gradient Accumulation** | 4 steps | Effective batch size = 64 sequences (65,536 tokens/step) |
 | **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer (`HuggingFaceTB/SmolLM-135M`) |
 | **Precision** | BFloat16 (`bf16`) | Native mixed precision |
-| **LR Schedule** | WSD | Warmup-Stable-Decay (80% stable, 20% decay) |
-| **Optimizer** | Muon + AdamW | Newton-Schulz matrix optimizer + fused AdamW |
+| **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
+| **Optimizer** | Muon + AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
 
 ---
 

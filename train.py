@@ -68,7 +68,7 @@ def main():
     parser.add_argument("--max-steps", type=int, default=3000, help="Total training steps")
     args = parser.parse_args()
 
-    GRAD_ACCUM_STEPS = 2  # Set to 2 for 4x faster progress bar updates (~0.38s/it)
+    GRAD_ACCUM_STEPS = 4  # Micro-batch 16 * 4 accum passes = 65,536 tokens/step
     accelerator = Accelerator(mixed_precision="bf16", gradient_accumulation_steps=GRAD_ACCUM_STEPS)
     
     config = GPT2Config(max_steps=args.max_steps, gradient_checkpointing=args.gradient_checkpointing)
@@ -80,7 +80,7 @@ def main():
     accelerator.print(f"  Grad Accum Steps    : {GRAD_ACCUM_STEPS}")
     accelerator.print(f"  Tokens / Step       : {tokens_per_step:,}")
     accelerator.print(f"  Total Steps         : {config.max_steps:,}")
-    accelerator.print(f"  LR Schedule         : WSD (Warmup-Stable-Decay)")
+    accelerator.print(f"  LR Schedule         : WSD (Warmup-Stable-Linear-Decay)")
     accelerator.print(f"  Optimizer           : {args.optimizer.upper()}")
     accelerator.print(f"  Positional Embed    : RoPE (Rotary Position Embeddings)")
     accelerator.print(f"  QK Head Normalizing : QK-Norm (RMSNorm on Q and K heads)")
@@ -169,15 +169,14 @@ def main():
                 batches_seen += 1
                 continue
                 
-            # WSD (Warmup-Stable-Decay) Learning Rate Schedule
+            # WSD (Warmup-Stable-Linear-Decay) Learning Rate Schedule
             if step < config.warmup_steps:
                 lr = config.learning_rate * (step + 1) / config.warmup_steps
             elif step < decay_start_step:
                 lr = config.learning_rate
             else:
                 decay_ratio = (step - decay_start_step) / max(1, config.max_steps - decay_start_step)
-                coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-                lr = config.min_lr + coeff * (config.learning_rate - config.min_lr)
+                lr = config.min_lr + (1.0 - decay_ratio) * (config.learning_rate - config.min_lr)
                 
             for param_group in optimizer_adamw.param_groups:
                 param_group['lr'] = lr
