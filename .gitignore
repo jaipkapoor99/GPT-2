@@ -8,6 +8,7 @@ fineweb_tokens.bin
 *.safetensors
 *.pt
 gpt2-fineweb-124m/
+accelerate_checkpoint/
 
 # Logs & Cache
 __pycache__/
