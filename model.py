@@ -16,28 +16,43 @@ import torch.nn.functional as F
 from config import GPT2Config
 
 class CausalSelfAttention(nn.Module):
-    """ High-performance Multi-Head Causal Self-Attention using PyTorch FlashAttention """
+    """ High-performance Grouped-Query Attention (GQA) using PyTorch FlashAttention """
     def __init__(self, config: GPT2Config):
         super().__init__()
         assert config.C % config.n_head == 0
-        self.c_attn = nn.Linear(config.C, 3 * config.C, bias=False)
-        self.c_proj = nn.Linear(config.C, config.C, bias=False)
-        self.c_proj.NANOGPT_SCALE_INIT = 1
+        assert config.n_head % config.n_kv_head == 0
         
         self.n_head = config.n_head
-        self.C = config.C
+        self.n_kv_head = config.n_kv_head
+        self.num_queries_per_kv = config.n_head // config.n_kv_head
         self.head_dim = config.head_dim
+        self.C = config.C
         self.dropout_p = config.dropout
+
+        q_dim = self.n_head * self.head_dim
+        kv_dim = self.n_kv_head * self.head_dim
+        
+        self.c_attn = nn.Linear(config.C, q_dim + 2 * kv_dim, bias=False)
+        self.c_proj = nn.Linear(config.C, config.C, bias=False)
+        self.c_proj.NANOGPT_SCALE_INIT = 1
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()
         qkv = self.c_attn(x)
-        q, k, v = qkv.split(self.C, dim=2)
+        
+        q_dim = self.n_head * self.head_dim
+        kv_dim = self.n_kv_head * self.head_dim
+        
+        q, k, v = qkv.split([q_dim, kv_dim, kv_dim], dim=2)
         
         q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
-        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
-        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        k = k.view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         
+        if self.num_queries_per_kv > 1:
+            k = k.repeat_interleave(self.num_queries_per_kv, dim=1)
+            v = v.repeat_interleave(self.num_queries_per_kv, dim=1)
+            
         dropout_p = self.dropout_p if self.training else 0.0
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=dropout_p)
         
