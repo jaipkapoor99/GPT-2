@@ -37,12 +37,8 @@ def sample_sequence(
             cond_ids = generated[:, -1024:]
             
             # Forward pass
-            if hasattr(model, "config") and hasattr(model.config, "model_type") and getattr(model.config, "model_type") == "gpt2" and not hasattr(model.config, "head_dim"):
-                out = model(input_ids=cond_ids)
-                logits = out.logits[:, -1, :]
-            else:
-                logits, _ = model(cond_ids)
-                logits = logits[:, -1, :]
+            out = model(cond_ids)
+            logits = out.logits[:, -1, :]
                 
             # Apply Repetition Penalty to prevent repetitive loops
             if repetition_penalty != 1.0:
