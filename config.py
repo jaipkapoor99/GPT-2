@@ -18,8 +18,8 @@ class GPT2Config:
     n_kv_head: int = 4          # Number of key/value heads for GQA (LLaMA 3 / Qwen 2.5 style)
     n_layer: int = 12           # Number of stacked Transformer blocks
     dropout: float = 0.0        # 10% Dropout regularization
-    learning_rate: float = 6e-4 # Max learning rate
-    min_lr: float = 6e-5        # Min learning rate for cosine schedule
+    learning_rate: float = 1.2e-3 # Accelerated max learning rate for SOTA loss reduction
+    min_lr: float = 1.2e-4        # Min learning rate for WSD schedule
     warmup_steps: int = 200     # Warmup steps
     max_steps: int = 10000      # Total training steps (1.31 Billion tokens)
     eval_interval: int = 250    # Evaluate dev loss every 250 steps
@@ -27,7 +27,7 @@ class GPT2Config:
     use_rope: bool = True       # Rotary Position Embeddings (LLaMA 3 / Qwen 2.5 standard)
     rope_base: float = 10000.0  # RoPE frequency base parameter
     use_qk_norm: bool = True    # QK Head RMSNorm (Qwen 2.5 / Gemma 2 standard for loss stability)
-    logit_softcap: float = 30.0 # Logit softcapping (Gemma 2 standard to prevent logit explosion)
+    logit_softcap: float = 15.0 # Gemma 2 standard logit softcapping (prevents overconfidence)
     vocab_size: Optional[int] = None # Dynamically populated from metadata or tokenizer
     head_dim: int = field(init=False)
 

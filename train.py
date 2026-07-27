@@ -100,16 +100,28 @@ def main():
     
     torch.set_float32_matmul_precision('high')
     
-    # Optimizer Construction
+    # Optimizer Construction (Accelerated Muon + Selective Zero-WD AdamW)
     if args.optimizer == "muon":
         muon_params = [p for name, p in model.named_parameters() if p.ndim == 2 and 'wte' not in name and 'wpe' not in name]
-        adamw_params = [p for name, p in model.named_parameters() if p.ndim != 2 or 'wte' in name or 'wpe' in name]
+        adamw_decay_params = [p for name, p in model.named_parameters() if p.ndim < 2 and 'wte' not in name and 'wpe' not in name and p.requires_grad]
+        adamw_nodecay_params = [p for name, p in model.named_parameters() if ('wte' in name or 'wpe' in name) and p.requires_grad]
         
-        optimizer_muon = Muon(muon_params, lr=0.02, momentum=0.95)
-        optimizer_adamw = torch.optim.AdamW(adamw_params, lr=config.learning_rate, weight_decay=0.1, betas=(0.9, 0.95), fused=True)
+        adamw_groups = [
+            {"params": adamw_decay_params, "weight_decay": 0.1},
+            {"params": adamw_nodecay_params, "weight_decay": 0.0}
+        ]
+        
+        optimizer_muon = Muon(muon_params, lr=0.04, momentum=0.95)
+        optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=config.learning_rate, betas=(0.9, 0.95), fused=True)
         model, optimizer_muon, optimizer_adamw = accelerator.prepare(model, optimizer_muon, optimizer_adamw)
     else:
-        optimizer_adamw = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1, betas=(0.9, 0.95), fused=True)
+        decay_params = [p for name, p in model.named_parameters() if p.ndim >= 2 and 'wte' not in name]
+        nodecay_params = [p for name, p in model.named_parameters() if p.ndim < 2 or 'wte' in name]
+        adamw_groups = [
+            {"params": decay_params, "weight_decay": 0.1},
+            {"params": nodecay_params, "weight_decay": 0.0}
+        ]
+        optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=config.learning_rate, betas=(0.9, 0.95), fused=True)
         model, optimizer_adamw = accelerator.prepare(model, optimizer_adamw)
         optimizer_muon = None
     
@@ -156,7 +168,7 @@ def main():
                 param_group['lr'] = lr
             if optimizer_muon is not None:
                 for param_group in optimizer_muon.param_groups:
-                    param_group['lr'] = 0.02 * (lr / config.learning_rate)
+                    param_group['lr'] = 0.04 * (lr / config.learning_rate)
                 
             with accelerator.accumulate(model):
                 logits, loss = model(xb, yb)
