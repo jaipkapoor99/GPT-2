@@ -8,6 +8,7 @@ import argparse
 import os
 import torch
 import torch.nn.functional as F
+from accelerate import Accelerator
 from transformers import AutoTokenizer
 from config import GPT2Config
 from model import GPT2
@@ -34,34 +35,41 @@ def generate_text(model, tokenizer, config, start_str="Hello, I am a language mo
     return tokenizer.decode(input_indices)
 
 def main():
-    parser = argparse.ArgumentParser(description="GPT-2 Text Generation CLI")
+    parser = argparse.ArgumentParser(description="GPT-2 Text Generation CLI (Accelerate Engine)")
     parser.add_argument("prompt", type=str, nargs="?", default="The future of artificial intelligence is", help="Input prompt text")
     parser.add_argument("--max-tokens", type=int, default=60, help="Maximum new tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     parser.add_argument("--top-k", type=int, default=50, help="Top-K sampling cutoff")
-    parser.add_argument("--load-checkpoint", type=str, default="gpt2_model.pth", help="Path to model checkpoint")
+    parser.add_argument("--load-checkpoint", type=str, default="accelerate_checkpoint", help="Path to Accelerate checkpoint directory")
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    accelerator = Accelerator()
+    device = accelerator.device
     
-    print(f"Loading SmolLM Tokenizer...")
+    accelerator.print(f"=== ACCELERATE TEXT GENERATION ENGINE ===")
+    accelerator.print(f"Loading SmolLM Tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
     
     config = GPT2Config(vocab_size=tokenizer.vocab_size)
-    model = GPT2(config).to(device)
+    model = GPT2(config)
+    model = accelerator.prepare(model)
     
-    if os.path.exists(args.load_checkpoint):
-        print(f"Loading trained weights from '{args.load_checkpoint}'...")
-        state_dict = torch.load(args.load_checkpoint, map_location=device)
-        cleaned_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-        model.load_state_dict(cleaned_state_dict)
+    if os.path.isdir(args.load_checkpoint):
+        accelerator.print(f"Loading Accelerate native state from '{args.load_checkpoint}'...")
+        accelerator.load_state(args.load_checkpoint)
+    elif os.path.exists("gpt2-fineweb-124m/model.safetensors"):
+        from safetensors.torch import load_file
+        accelerator.print(f"Loading Safetensors weights from 'gpt2-fineweb-124m/model.safetensors'...")
+        state_dict = load_file("gpt2-fineweb-124m/model.safetensors")
+        unwrapped = accelerator.unwrap_model(model)
+        unwrapped.load_state_dict(state_dict)
     else:
-        print(f"Checkpoint '{args.load_checkpoint}' not found! Running generation with initial weights...")
+        accelerator.print(f"No checkpoint found! Running generation with initial model weights...")
         
-    print(f"\nPrompt: '{args.prompt}'")
+    accelerator.print(f"\nPrompt: '{args.prompt}'")
     output = generate_text(model, tokenizer, config, start_str=args.prompt, max_new_tokens=args.max_tokens, temperature=args.temperature, top_k=args.top_k, device=device)
-    print("\n--- GENERATED TEXT ---")
-    print(output)
+    accelerator.print("\n--- GENERATED TEXT ---")
+    accelerator.print(output)
 
 if __name__ == "__main__":
     main()

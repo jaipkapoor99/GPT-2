@@ -90,13 +90,6 @@ def main():
         model = GPT2.from_pretrained(args.from_pretrained)
     else:
         model = GPT2(config)
-        ckpt_path = args.load_checkpoint or ("gpt2_model.pth" if args.resume else None)
-        if ckpt_path and os.path.isfile(ckpt_path):
-            accelerator.print(f"Loading weights from PyTorch checkpoint: '{ckpt_path}'...")
-            state_dict = torch.load(ckpt_path, map_location="cpu")
-            cleaned_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-            model.load_state_dict(cleaned_state_dict)
-            accelerator.print(f"✓ Checkpoint weights successfully loaded into model!")
             
     print_parameter_breakdown(model, accelerator)
     
@@ -208,15 +201,10 @@ def main():
     # Save Accelerate Native Multi-GPU State
     accelerator.print("Saving full Accelerate state to 'accelerate_checkpoint'...")
     accelerator.save_state(accelerate_dir)
-    accelerator.print("✓ Saved full Accelerate state.")
+    accelerator.save_model(model, "gpt2-fineweb-124m")
+    accelerator.print("✓ Saved full Accelerate state and model directory 'gpt2-fineweb-124m'.")
     
-    # Save Clean Standard PyTorch Checkpoint (Main Process)
     if accelerator.is_main_process:
-        unwrapped = accelerator.unwrap_model(model)
-        checkpoint_path = "gpt2_model.pth"
-        torch.save(unwrapped.state_dict(), checkpoint_path)
-        accelerator.print(f"✓ Saved model weights to '{checkpoint_path}'")
-        
         # Save Tabular Loss Metrics (JSON & CSV)
         with open("loss_history.json", "w") as f:
             json.dump(history, f, indent=2)
