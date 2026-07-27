@@ -21,6 +21,7 @@ from tqdm import tqdm
 from config import GPT2Config
 from model import GPT2
 from dataset import get_dataloaders
+from muon import Muon
 
 def print_parameter_breakdown(model: GPT2, accelerator: Accelerator):
     unwrapped = accelerator.unwrap_model(model)
@@ -59,7 +60,8 @@ def main():
                         help="Optionally load pre-trained OpenAI weights instead of training from scratch")
     parser.add_argument("--resume", action="store_true", help="Resume training using Accelerate state or local 'gpt2_model.pth'")
     parser.add_argument("--load-checkpoint", type=str, default=None, help="Path to local checkpoint file or Accelerate checkpoint directory")
-    parser.add_argument("--gradient-checkpointing", action="store_true", help="Enable activation checkpointing for ~60% VRAM memory savings")
+    parser.add_argument("--optimizer", type=str, default="muon", choices=["muon", "adamw"], help="Optimizer choice: muon (Muon + AdamW hybrid) or adamw")
+    parser.add_argument("--gradient-checkpointing", action="store_true", help="Enable activation checkpointing for ~60%% VRAM memory savings")
     parser.add_argument("--max-steps", type=int, default=3000, help="Total training steps")
     args = parser.parse_args()
 
@@ -76,6 +78,8 @@ def main():
     accelerator.print(f"  Tokens / Step       : {tokens_per_step:,}")
     accelerator.print(f"  Total Steps         : {config.max_steps:,}")
     accelerator.print(f"  LR Schedule         : WSD (Warmup-Stable-Decay)")
+    accelerator.print(f"  Optimizer           : {args.optimizer.upper()}")
+    accelerator.print(f"  Positional Embed    : RoPE (Rotary Position Embeddings)")
     accelerator.print(f"  Grad Checkpointing  : {'ENABLED (~60% VRAM savings)' if config.gradient_checkpointing else 'DISABLED'}")
     
     train_loader, dev_loader, _ = get_dataloaders(config, accelerator)
@@ -97,8 +101,19 @@ def main():
     print_parameter_breakdown(model, accelerator)
     
     torch.set_float32_matmul_precision('high')
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1, betas=(0.9, 0.95), fused=True)
-    model, optimizer = accelerator.prepare(model, optimizer)
+    
+    # Optimizer Construction
+    if args.optimizer == "muon":
+        muon_params = [p for name, p in model.named_parameters() if p.ndim == 2 and 'wte' not in name and 'wpe' not in name]
+        adamw_params = [p for name, p in model.named_parameters() if p.ndim != 2 or 'wte' in name or 'wpe' in name]
+        
+        optimizer_muon = Muon(muon_params, lr=0.02, momentum=0.95)
+        optimizer_adamw = torch.optim.AdamW(adamw_params, lr=config.learning_rate, weight_decay=0.1, betas=(0.9, 0.95), fused=True)
+        model, optimizer_muon, optimizer_adamw = accelerator.prepare(model, optimizer_muon, optimizer_adamw)
+    else:
+        optimizer_adamw = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1, betas=(0.9, 0.95), fused=True)
+        model, optimizer_adamw = accelerator.prepare(model, optimizer_adamw)
+        optimizer_muon = None
     
     # Accelerate Native State Resumption (Model + Optimizer + RNG state)
     accelerate_dir = "accelerate_checkpoint"
@@ -139,16 +154,23 @@ def main():
                 coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
                 lr = config.min_lr + coeff * (config.learning_rate - config.min_lr)
                 
-            for param_group in optimizer.param_groups:
+            for param_group in optimizer_adamw.param_groups:
                 param_group['lr'] = lr
+            if optimizer_muon is not None:
+                for param_group in optimizer_muon.param_groups:
+                    param_group['lr'] = 0.02 * (lr / config.learning_rate)
                 
             with accelerator.accumulate(model):
                 logits, loss = model(xb, yb)
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                optimizer.zero_grad()
+                optimizer_adamw.step()
+                if optimizer_muon is not None:
+                    optimizer_muon.step()
+                optimizer_adamw.zero_grad()
+                if optimizer_muon is not None:
+                    optimizer_muon.zero_grad()
                 
             if accelerator.sync_gradients:
                 step += 1

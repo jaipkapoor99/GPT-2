@@ -13,10 +13,42 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional, Tuple
 from config import GPT2Config
 
+def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """ Apply Rotary Position Embedding (RoPE) to input tensor x """
+    d = x.shape[-1] // 2
+    x1 = x[..., :d]
+    x2 = x[..., d:]
+    y1 = x1 * cos[..., :d] - x2 * sin[..., :d]
+    y2 = x1 * sin[..., :d] + x2 * cos[..., :d]
+    return torch.cat([y1, y2], dim=-1)
+
+class RotaryEmbedding(nn.Module):
+    """ Rotary Position Embedding (RoPE) Module (LLaMA 3 / Qwen 2.5 standard) """
+    def __init__(self, dim: int, max_seq_len: int = 4096, base: float = 10000.0):
+        super().__init__()
+        self.dim = dim
+        self.max_seq_len = max_seq_len
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self._build_cache(max_seq_len)
+
+    def _build_cache(self, seq_len: int):
+        t = torch.arange(seq_len, dtype=self.inv_freq.dtype, device=self.inv_freq.device)
+        freqs = torch.outer(t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", emb.cos()[None, None, :, :], persistent=False)
+        self.register_buffer("sin_cached", emb.sin()[None, None, :, :], persistent=False)
+
+    def forward(self, x: torch.Tensor, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        if seq_len > self.cos_cached.size(2):
+            self._build_cache(seq_len)
+        return self.cos_cached[:, :, :seq_len, :], self.sin_cached[:, :, :seq_len, :]
+
 class CausalSelfAttention(nn.Module):
-    """ High-performance Grouped-Query Attention (GQA) using PyTorch FlashAttention """
+    """ High-performance Grouped-Query Attention (GQA) with RoPE using PyTorch FlashAttention """
     def __init__(self, config: GPT2Config):
         super().__init__()
         assert config.C % config.n_head == 0
@@ -36,7 +68,7 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(config.C, config.C, bias=False)
         self.c_proj.NANOGPT_SCALE_INIT = 1
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, rot_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         B, T, C = x.size()
         qkv = self.c_attn(x)
         
@@ -49,6 +81,11 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         
+        if rot_emb is not None:
+            cos, sin = rot_emb
+            q = apply_rotary_emb(q, cos, sin)
+            k = apply_rotary_emb(k, cos, sin)
+
         if self.num_queries_per_kv > 1:
             k = k.repeat_interleave(self.num_queries_per_kv, dim=1)
             v = v.repeat_interleave(self.num_queries_per_kv, dim=1)
@@ -94,13 +131,13 @@ class Block(nn.Module):
         self.ln_2 = RMSNorm(config.C)
         self.mlp  = SwiGLUMLP(config)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x: torch.Tensor, rot_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+        x = x + self.attn(self.ln_1(x), rot_emb=rot_emb)
         x = x + self.mlp(self.ln_2(x))
         return x
 
 class GPT2(nn.Module):
-    """ Full GPT-2 (124M) Language Model Class with RMSNorm """
+    """ Full GPT-2 (124M) Language Model Class with RMSNorm, RoPE, & GQA """
     def __init__(self, config: GPT2Config):
         super().__init__()
         self.config = config
@@ -114,6 +151,11 @@ class GPT2(nn.Module):
         ))
         self.lm_head = nn.Linear(config.C, config.vocab_size, bias=False)
         
+        if config.use_rope:
+            self.rotary_emb = RotaryEmbedding(config.head_dim, max_seq_len=config.T, base=config.rope_base)
+        else:
+            self.rotary_emb = None
+            
         # Weight Tying
         self.transformer.wte.weight = self.lm_head.weight
         
@@ -134,16 +176,21 @@ class GPT2(nn.Module):
         B, T = idx.size()
         assert T <= self.config.T, f"Cannot forward sequence length {T}, model block size is {self.config.T}"
         
-        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
         tok_emb = self.transformer.wte(idx)
-        pos_emb = self.transformer.wpe(pos)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        if self.config.use_rope and self.rotary_emb is not None:
+            x = self.transformer.drop(tok_emb)
+            rot_emb = self.rotary_emb(x, T)
+        else:
+            pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
+            pos_emb = self.transformer.wpe(pos)
+            x = self.transformer.drop(tok_emb + pos_emb)
+            rot_emb = None
         
         for block in self.transformer.h:
             if self.config.gradient_checkpointing and self.training:
-                x = torch.utils.checkpoint.checkpoint(block, x, use_reentrant=False)
+                x = torch.utils.checkpoint.checkpoint(block, x, rot_emb, use_reentrant=False)
             else:
-                x = block(x)
+                x = block(x, rot_emb=rot_emb)
         x = self.transformer.ln_f(x)
         
         if targets is not None:
