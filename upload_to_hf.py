@@ -48,7 +48,8 @@ def main():
             path_or_fileobj=safetensors_file,
             path_in_repo="model.safetensors",
             repo_id=repo_id,
-            repo_type="model"
+            repo_type="model",
+            commit_message="Update trained SOTA GPT-2 model weights"
         )
     if os.path.exists(config_file):
         api.upload_file(
