@@ -16,11 +16,11 @@ class GPT2Config:
     C: int = 768                # Channels / Embedding dimension (C)
     n_head: int = 12            # Number of self-attention heads
     n_layer: int = 12           # Number of stacked Transformer blocks
-    dropout: float = 0.1        # 10% Dropout regularization
+    dropout: float = 0.0        # 10% Dropout regularization
     learning_rate: float = 6e-4 # Max learning rate
     min_lr: float = 6e-5        # Min learning rate for cosine schedule
     warmup_steps: int = 200     # Warmup steps
-    max_steps: int = 3000       # Total training steps
+    max_steps: int = 10000      # Total training steps (1.31 Billion tokens)
     eval_interval: int = 250    # Evaluate dev loss every 250 steps
     vocab_size: Optional[int] = None # Dynamically populated from metadata or tokenizer
     head_dim: int = field(init=False)

@@ -62,7 +62,7 @@ def main():
     args = parser.parse_args()
 
     GRAD_ACCUM_STEPS = 8
-    accelerator = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=GRAD_ACCUM_STEPS)
+    accelerator = Accelerator(mixed_precision="bf16", gradient_accumulation_steps=GRAD_ACCUM_STEPS)
     
     config = GPT2Config(max_steps=args.max_steps)
     effective_batch = config.B * GRAD_ACCUM_STEPS
