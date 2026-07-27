@@ -2,6 +2,14 @@
 *.bin
 shards/
 fineweb_tokens.bin
+
+# Model Weights Checkpoints
+*.pth
+*.safetensors
+*.pt
+gpt2-fineweb-124m/*.safetensors
+
+# Logs & Cache
 __pycache__/
 .ipynb_checkpoints/
 *.log
