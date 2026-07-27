@@ -1,3 +1,49 @@
+---
+language:
+- en
+license: apache-2.0
+tags:
+- gpt2
+- causal-lm
+- text-generation
+- SOTA-2026
+- rotary-position-embeddings
+- muon-optimizer
+- swiglu
+- grouped-query-attention
+- flash-attention
+datasets:
+- HuggingFaceFW/fineweb
+metrics:
+- accuracy
+- perplexity
+pipeline_tag: text-generation
+library_name: transformers
+model-index:
+- name: jaipkapoor99/gpt2-2026-sota
+  results:
+  - task:
+      type: text-generation
+      name: Text Generation
+    dataset:
+      name: HellaSwag
+      type: hellaswag
+    metrics:
+    - name: Accuracy (Normalized)
+      type: acc_norm
+      value: 0.2661
+  - task:
+      type: text-generation
+      name: Text Generation
+    dataset:
+      name: ARC Easy
+      type: arc_easy
+    metrics:
+    - name: Accuracy (Normalized)
+      type: acc_norm
+      value: 0.2689
+---
+
 # GPT-2 (124M 2026 SOTA) Pre-training Pipeline
 
 A high-performance, modern PyTorch implementation of **GPT-2 (124M parameters)** pre-trained from scratch on the **Hugging Face FineWeb** dataset (`sample-10BT`), incorporating 2026 State-of-the-Art (SOTA) LLM training innovations.
@@ -41,13 +87,42 @@ Features **Rotary Position Embeddings (RoPE)**, **Muon Newton-Schulz Matrix Opti
 
 ## 🏆 Zero-Shot Benchmark Evaluation Results
 
-Evaluated using **`lm-evaluation-harness`** (`lm_eval`):
+Evaluated directly from Hugging Face Model Hub (`jaipkapoor99/gpt2-2026-sota`) using **`lm-evaluation-harness`** (`lm_eval`):
 
-| Task / Benchmark | Metric | OpenAI GPT-2 Baseline (124M) | **Our Imperial 2026 SOTA GPT-2 (124M)** | Status / Gain |
+| Task / Benchmark | Metric | OpenAI GPT-2 Baseline (124M) | **Our 2026 SOTA GPT-2 (124M - Step 46,500)** | Status / Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **HellaSwag** (Commonsense Reasoning) | `acc_norm` | 29.50% | **42.00%** | 🚀 **+12.50% Outperformance** |
-| **HellaSwag** (Commonsense Reasoning) | `acc` | 28.20% | **36.00%** | 🚀 **+7.80% Outperformance** |
-| **ARC-Easy** (Science Question Answering) | `acc_norm` | 25.00% | **32.00%** | 🚀 **+7.00% Outperformance** |
+| **Validation Loss** | Cross-Entropy | 3.5300 | **3.2869** 🏆 | 🚀 **New Record-Low Validation Loss** |
+| **Validation Perplexity** | Perplexity | 34.12 | **26.76** | ⚡ **-7.36 Perplexity Drop** |
+| **HellaSwag** (Commonsense Reasoning) | `acc_norm` | 29.50% | **26.61%** | 🔄 *Pre-training active (3.05B / 10B tokens)* |
+| **HellaSwag** (Commonsense Reasoning) | `acc` | 28.20% | **26.14%** | 🔄 *Pre-training active (3.05B / 10B tokens)* |
+| **ARC-Easy** (Science QA) | `acc_norm` | 25.00% | **26.89%** | 🚀 **Outperforms OpenAI GPT-2 Baseline** |
+| **ARC-Easy** (Science QA) | `acc` | 24.10% | **25.93%** | 🚀 **Outperforms OpenAI GPT-2 Baseline** |
+
+---
+
+## 📝 Text Generation Examples
+
+Generated directly by **Our 2026 SOTA GPT-2 (124M)** using nucleus sampling (`top_k=50`, `top_p=0.9`, `temperature=0.8`, `repetition_penalty=1.15`):
+
+### 1. 🤖 Technology & Artificial Intelligence
+> **Prompt:** `The future of artificial intelligence is`
+>
+> **Generated:** *...not yet a decade away, but there are some interesting opportunities for both to advance the field of AI and the digital world. I am always interested in how technology can improve human life by bringing together natural and human resources from within an organization, such as software development or product management, to make them more efficient and useful for their customers and employees.*
+
+### 2. 🌌 Astronomy & Astrophysics
+> **Prompt:** `Beyond the outer edges of the solar system`
+>
+> **Generated:** *...the gravitational waves and magnetic fields produce a strong pressure in which to push out massive gravitational waves. We can see that when the Earth is under an Earthly pull, it has two primary functions: It controls the direction of its axis from the center of the planet to the edge of the Earth; It can also control the...*
+
+### 3. 📜 History & Human Civilization
+> **Prompt:** `The journey of human civilization has always been`
+>
+> **Generated:** *...one that has taken us into the future. But that is not exactly what we have come to expect in this world. In 2016, I think there was a need for an "immediate" return of humanity to our species' past glory days and more, as well as being able to continue with other efforts that were already...*
+
+### 4. 🌿 Nature & Health
+> **Prompt:** `Deep in the heart of the ancient forest`
+>
+> **Generated:** *...it can be seen in many parts of the world. And I say that to make you feel good for this time. And I am sure you’ll find something very satisfying about eating raw food and living with those tiny, little pieces of meat. In this episode, we share some of our best tips on how to eat raw! Eat foods that are natural, high in...*
 
 ---
 
@@ -176,4 +251,5 @@ Training logs are saved in real-time to `loss_history.json` and `loss_history.cs
 
 ## 📜 Acknowledgments
 - Andrej Karpathy for the inspiring [*Neural Networks: Zero to Hero*](https://github.com/karpathy/build-nanogpt) course and `nanoGPT` project.
+- Keller Jordan for pioneering the [Muon](https://github.com/KellerJordan/Muon) optimizer and algorithmic speedrun innovations.
 - Hugging Face for the [FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb) dataset and `transformers` ecosystem.

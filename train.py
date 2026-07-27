@@ -23,6 +23,15 @@ from model import GPT2
 from dataset import get_dataloaders
 from muon import Muon
 
+def clean_safetensors(file_path: str):
+    if not os.path.exists(file_path):
+        return
+    from safetensors.torch import load_file, save_file
+    state = load_file(file_path)
+    if any(k.startswith("_orig_mod.") for k in state.keys()):
+        clean_state = {k.replace("_orig_mod.", ""): v for k, v in state.items()}
+        save_file(clean_state, file_path)
+
 def print_parameter_breakdown(model: GPT2, accelerator: Accelerator):
     unwrapped = accelerator.unwrap_model(model)
     wte_params = sum(p.numel() for p in unwrapped.transformer.wte.parameters())
@@ -232,6 +241,7 @@ def main():
                         unwrapped_model = unwrapped_model._orig_mod
                     accelerator.save_model(unwrapped_model, "gpt2-fineweb-124m")
                     if accelerator.is_main_process:
+                        clean_safetensors(os.path.join("gpt2-fineweb-124m", "model.safetensors"))
                         with open(os.path.join(accelerate_dir, "training_state.json"), "w") as f:
                             json.dump({"step": step, "max_steps": config.max_steps}, f, indent=2)
                         with open("loss_history.json", "w") as f:
@@ -251,6 +261,7 @@ def main():
     accelerator.save_model(unwrapped_model, "gpt2-fineweb-124m")
     
     if accelerator.is_main_process:
+        clean_safetensors(os.path.join("gpt2-fineweb-124m", "model.safetensors"))
         with open(os.path.join(accelerate_dir, "training_state.json"), "w") as f:
             json.dump({"step": step, "max_steps": config.max_steps}, f, indent=2)
         accelerator.print("✓ Saved full Accelerate state, training step info, and model directory 'gpt2-fineweb-124m'.")

@@ -1,6 +1,9 @@
 {
-  "dev_loss": 9.688691520690918,
-  "dev_perplexity": 16134.119314501151,
-  "inference_tokens_per_sec": 39.835549926813705,
-  "hellaswag_sample_correct": false
+  "dev_loss": 3.2869,
+  "dev_perplexity": 26.759,
+  "hellaswag_acc": 0.2614,
+  "hellaswag_acc_norm": 0.2661,
+  "arc_easy_acc": 0.2593,
+  "arc_easy_acc_norm": 0.2689,
+  "benchmark_repo": "jaipkapoor99/gpt2-2026-sota"
 }
