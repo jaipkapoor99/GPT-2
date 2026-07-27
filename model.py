@@ -161,7 +161,7 @@ class GPT2(nn.Module):
             ln_f = RMSNorm(config.C),
         ))
         self.lm_head = nn.Linear(config.C, config.vocab_size, bias=False)
-        
+
         if config.use_rope:
             self.rotary_emb = RotaryEmbedding(config.head_dim, max_seq_len=config.T, base=config.rope_base)
         else:
@@ -171,6 +171,13 @@ class GPT2(nn.Module):
         self.transformer.wte.weight = self.lm_head.weight
         
         self.apply(self._init_weights)
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    def tie_weights(self):
+        self.transformer.wte.weight = self.lm_head.weight
 
     def _init_weights(self, module: nn.Module):
         if isinstance(module, nn.Linear):
@@ -204,18 +211,16 @@ class GPT2(nn.Module):
                 x = block(x, rot_emb=rot_emb)
         x = self.transformer.ln_f(x)
         
-        if targets is not None:
-            logits = self.lm_head(x)
-            if self.config.logit_softcap > 0.0:
-                logits = self.config.logit_softcap * torch.tanh(logits / self.config.logit_softcap)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-        else:
-            logits = self.lm_head(x[:, [-1], :])
-            if self.config.logit_softcap > 0.0:
-                logits = self.config.logit_softcap * torch.tanh(logits / self.config.logit_softcap)
-            loss = None
+        logits = self.lm_head(x)
+        if self.config.logit_softcap > 0.0:
+            logits = self.config.logit_softcap * torch.tanh(logits / self.config.logit_softcap)
             
-        return logits, loss
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            
+        from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
+        return CausalLMOutputWithCrossAttentions(loss=loss, logits=logits)
 
     @classmethod
     def from_pretrained(cls, model_type: str = "gpt2"):

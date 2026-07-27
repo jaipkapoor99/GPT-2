@@ -227,7 +227,10 @@ def main():
                     
                     # Periodic Checkpoint Saving (Guarantees weights are saved on disk at every eval step)
                     accelerator.save_state(accelerate_dir)
-                    accelerator.save_model(model, "gpt2-fineweb-124m")
+                    unwrapped_model = accelerator.unwrap_model(model)
+                    if hasattr(unwrapped_model, "_orig_mod"):
+                        unwrapped_model = unwrapped_model._orig_mod
+                    accelerator.save_model(unwrapped_model, "gpt2-fineweb-124m")
                     if accelerator.is_main_process:
                         with open(os.path.join(accelerate_dir, "training_state.json"), "w") as f:
                             json.dump({"step": step, "max_steps": config.max_steps}, f, indent=2)
@@ -242,7 +245,10 @@ def main():
     # Save Accelerate Native Multi-GPU State
     accelerator.print("Saving full Accelerate state to 'accelerate_checkpoint'...")
     accelerator.save_state(accelerate_dir)
-    accelerator.save_model(model, "gpt2-fineweb-124m")
+    unwrapped_model = accelerator.unwrap_model(model)
+    if hasattr(unwrapped_model, "_orig_mod"):
+        unwrapped_model = unwrapped_model._orig_mod
+    accelerator.save_model(unwrapped_model, "gpt2-fineweb-124m")
     
     if accelerator.is_main_process:
         with open(os.path.join(accelerate_dir, "training_state.json"), "w") as f:
