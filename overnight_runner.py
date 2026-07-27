@@ -95,16 +95,26 @@ def main():
                 
         log("\n✓ Full 10 Billion Token Pre-training Complete!")
     
-    # 3. Upload to Hugging Face Model Hub with automatic retries
-    log("\n3. Uploading final model weights & codebase to Hugging Face Model Hub...")
+    # 3. Upload pre-trained model weights & codebase to Hugging Face Model Hub
+    log("\n3. Uploading final pre-trained model weights to Hugging Face Model Hub...")
     try:
         run_with_retries(["python", "-u", "upload_to_hf.py"], max_retries=3, delay_secs=30)
-        log("✓ Successfully uploaded final model and codebase to Hugging Face Model Hub!")
+        log("✓ Successfully uploaded pre-trained model to Hugging Face Model Hub!")
     except Exception as e:
         log(f"❌ Upload error: {e}")
         sys.exit(1)
+        
+    # 4. Launch Supervised Fine-Tuning (SFT / Instruction Tuning)
+    log("\n4. Launching Large-Scale Supervised Fine-Tuning (sft_train.py on HuggingFaceTB/smoltalk)...")
+    sft_cmd = ["python", "-u", "sft_train.py", "--model-path", "gpt2-fineweb-124m", "--output-dir", "gpt2-sota-instruct", "--dataset-name", "HuggingFaceTB/smoltalk", "--epochs", "1"]
+    try:
+        run_with_retries(sft_cmd, max_retries=3, delay_secs=30)
+        log("✓ Large-Scale Supervised Fine-Tuning (SFT) Complete!")
+    except Exception as e:
+        log(f"❌ SFT Fine-Tuning error: {e}")
+        sys.exit(1)
     
-    log("\n=== OVERNIGHT SUPERVISOR SUCCESSFULLY COMPLETED ALL TASKS ===")
+    log("\n=== OVERNIGHT SUPERVISOR SUCCESSFULLY COMPLETED ALL PRE-TRAINING & SFT TASKS ===")
 
 if __name__ == "__main__":
     main()
