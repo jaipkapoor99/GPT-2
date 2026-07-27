@@ -21,7 +21,7 @@ class GPT2Config:
     learning_rate: float = 1.2e-3 # Accelerated max learning rate for SOTA loss reduction
     min_lr: float = 1.2e-4        # Min learning rate for WSD schedule
     warmup_steps: int = 200     # Warmup steps
-    max_steps: int = 10000      # Total training steps (1.31 Billion tokens)
+    max_steps: int = 152587     # Total training steps for 100% FineWeb dataset (10.0 Billion tokens)
     eval_interval: int = 250    # Evaluate dev loss every 250 steps
     gradient_checkpointing: bool = False # Activation checkpointing for memory optimization
     use_rope: bool = True       # Rotary Position Embeddings (LLaMA 3 / Qwen 2.5 standard)
