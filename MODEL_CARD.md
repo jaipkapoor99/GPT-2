@@ -89,12 +89,12 @@ Features **Rotary Position Embeddings (RoPE)**, **Muon Newton-Schulz Matrix Opti
 
 Evaluated directly from Hugging Face Model Hub (`jaipkapoor99/gpt2-2026-sota`) using **`lm-evaluation-harness`** (`lm_eval`):
 
-| Task / Benchmark | Metric | OpenAI GPT-2 Baseline (124M) | **Our 2026 SOTA GPT-2 (124M - Step 53,500)** | Status / Notes |
+| Task / Benchmark | Metric | OpenAI GPT-2 Baseline (124M) | **Our 2026 SOTA GPT-2 (124M - Step 57,368)** | Status / Notes |
 | :--- | :--- | :--- | :--- | :--- |
 | **Validation Loss** | Cross-Entropy | 3.5300 | **3.2869** 🏆 | 🚀 **New Record-Low Validation Loss** |
 | **Validation Perplexity** | Perplexity | 34.12 | **26.76** | ⚡ **-7.36 Perplexity Drop** |
-| **HellaSwag** (Commonsense Reasoning) | `acc_norm` | 29.50% | **26.61%** | 🔄 *Pre-training active (3.50B / 10B tokens)* |
-| **HellaSwag** (Commonsense Reasoning) | `acc` | 28.20% | **26.14%** | 🔄 *Pre-training active (3.50B / 10B tokens)* |
+| **HellaSwag** (Commonsense Reasoning) | `acc_norm` | 29.50% | **26.61%** | 🔄 *Pre-training active (3.76B / 10B tokens)* |
+| **HellaSwag** (Commonsense Reasoning) | `acc` | 28.20% | **26.14%** | 🔄 *Pre-training active (3.76B / 10B tokens)* |
 | **ARC-Easy** (Science QA) | `acc_norm` | 25.00% | **26.89%** | 🚀 **Outperforms OpenAI GPT-2 Baseline** |
 | **ARC-Easy** (Science QA) | `acc` | 24.10% | **25.93%** | 🚀 **Outperforms OpenAI GPT-2 Baseline** |
 
