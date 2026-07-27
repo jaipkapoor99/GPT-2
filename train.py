@@ -125,13 +125,22 @@ def main():
         model, optimizer_adamw = accelerator.prepare(model, optimizer_adamw)
         optimizer_muon = None
     
-    # Accelerate Native State Resumption (Model + Optimizer + RNG state)
+    # Accelerate Native State Resumption (Model + Optimizer + RNG state + Step Counter)
     accelerate_dir = "accelerate_checkpoint"
+    resume_step = 0
+    state_file = os.path.join(accelerate_dir, "training_state.json")
+    
     if args.resume or args.load_checkpoint:
         dir_to_load = args.load_checkpoint if (args.load_checkpoint and os.path.isdir(args.load_checkpoint)) else accelerate_dir
         if os.path.isdir(dir_to_load):
             accelerator.print(f"Resuming full Accelerate training state (model + optimizer) from '{dir_to_load}'...")
             accelerator.load_state(dir_to_load)
+            
+            if os.path.exists(os.path.join(dir_to_load, "training_state.json")):
+                with open(os.path.join(dir_to_load, "training_state.json"), "r") as f:
+                    state_info = json.load(f)
+                    resume_step = state_info.get("step", 0)
+                    accelerator.print(f"✓ Restored exact training step: {resume_step:,} (Fast-forwarding data loader past seen batches)")
             accelerator.print(f"✓ Full Accelerate training state restored successfully!")
     
     # Enable PyTorch 2.0 TorchInductor Compilation for Speed Boost
@@ -139,20 +148,26 @@ def main():
     model = torch.compile(model)
     
     model.train()
-    step = 0
+    step = resume_step
     history = []
     
     accelerator.print(f"Starting pre-training for {config.max_steps} steps ({tokens_per_step * config.max_steps:,} total tokens)...\n")
     print_table_header(accelerator)
     
-    pbar = tqdm(total=config.max_steps, desc="Pre-training GPT-2")
+    pbar = tqdm(total=config.max_steps, initial=resume_step, desc="Pre-training GPT-2")
     
     decay_start_step = int(0.8 * config.max_steps) # 80% stable phase, 20% decay phase
+    batches_seen = 0
     
     while step < config.max_steps:
         for xb, yb in train_loader:
             if step >= config.max_steps:
                 break
+                
+            # Fast-forward DataLoader batches if resuming past completed steps
+            if batches_seen < resume_step * GRAD_ACCUM_STEPS:
+                batches_seen += 1
+                continue
                 
             # WSD (Warmup-Stable-Decay) Learning Rate Schedule
             if step < config.warmup_steps:
@@ -219,7 +234,11 @@ def main():
     accelerator.print("Saving full Accelerate state to 'accelerate_checkpoint'...")
     accelerator.save_state(accelerate_dir)
     accelerator.save_model(model, "gpt2-fineweb-124m")
-    accelerator.print("✓ Saved full Accelerate state and model directory 'gpt2-fineweb-124m'.")
+    
+    if accelerator.is_main_process:
+        with open(os.path.join(accelerate_dir, "training_state.json"), "w") as f:
+            json.dump({"step": step, "max_steps": config.max_steps}, f, indent=2)
+        accelerator.print("✓ Saved full Accelerate state, training step info, and model directory 'gpt2-fineweb-124m'.")
     
     if accelerator.is_main_process:
         # Save Tabular Loss Metrics (JSON & CSV)
