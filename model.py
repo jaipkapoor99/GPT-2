@@ -20,8 +20,8 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config: GPT2Config):
         super().__init__()
         assert config.C % config.n_head == 0
-        self.c_attn = nn.Linear(config.C, 3 * config.C)
-        self.c_proj = nn.Linear(config.C, config.C)
+        self.c_attn = nn.Linear(config.C, 3 * config.C, bias=False)
+        self.c_proj = nn.Linear(config.C, config.C, bias=False)
         self.c_proj.NANOGPT_SCALE_INIT = 1
         
         self.n_head = config.n_head
@@ -59,13 +59,24 @@ class SwiGLUMLP(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
+class RMSNorm(nn.Module):
+    """ Root Mean Square Layer Normalization (RMSNorm) - LLaMA / Qwen 2.5 standard """
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return output * self.weight
+
 class Block(nn.Module):
     """ Transformer Block: Communication (FlashAttention) + Computation (SwiGLU MLP) """
     def __init__(self, config: GPT2Config):
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.C)
+        self.ln_1 = RMSNorm(config.C)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config.C)
+        self.ln_2 = RMSNorm(config.C)
         self.mlp  = SwiGLUMLP(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -74,7 +85,7 @@ class Block(nn.Module):
         return x
 
 class GPT2(nn.Module):
-    """ Full GPT-2 (124M) Language Model Class """
+    """ Full GPT-2 (124M) Language Model Class with RMSNorm """
     def __init__(self, config: GPT2Config):
         super().__init__()
         self.config = config
@@ -84,7 +95,7 @@ class GPT2(nn.Module):
             wpe = nn.Embedding(config.T, config.C),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = nn.LayerNorm(config.C),
+            ln_f = RMSNorm(config.C),
         ))
         self.lm_head = nn.Linear(config.C, config.vocab_size, bias=False)
         
