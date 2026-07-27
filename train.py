@@ -57,6 +57,7 @@ def main():
     parser = argparse.ArgumentParser(description="GPT-2 Pre-training Pipeline")
     parser.add_argument("--from-pretrained", type=str, default=None, choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'],
                         help="Optionally load pre-trained OpenAI weights instead of training from scratch")
+    parser.add_argument("--resume", action="store_true", help="Resume training directly from local 'gpt2_model.pth' checkpoint")
     parser.add_argument("--load-checkpoint", type=str, default=None, help="Path to local checkpoint file (e.g. gpt2_model.pth)")
     parser.add_argument("--max-steps", type=int, default=3000, help="Total training steps")
     args = parser.parse_args()
@@ -82,9 +83,15 @@ def main():
         model = GPT2.from_pretrained(args.from_pretrained)
     else:
         model = GPT2(config)
-        if args.load_checkpoint and os.path.exists(args.load_checkpoint):
-            accelerator.print(f"Loading local checkpoint from '{args.load_checkpoint}'...")
-            model.load_state_dict(torch.load(args.load_checkpoint, map_location="cpu"))
+        ckpt_path = args.load_checkpoint or ("gpt2_model.pth" if args.resume else None)
+        if ckpt_path and os.path.exists(ckpt_path):
+            accelerator.print(f"Resuming training from checkpoint: '{ckpt_path}'...")
+            state_dict = torch.load(ckpt_path, map_location="cpu")
+            cleaned_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+            model.load_state_dict(cleaned_state_dict)
+            accelerator.print(f"✓ Checkpoint weights successfully loaded into model!")
+        elif args.resume:
+            accelerator.print(f"⚠️ --resume passed but checkpoint '{ckpt_path}' not found! Starting training from scratch...")
             
     print_parameter_breakdown(model, accelerator)
     
