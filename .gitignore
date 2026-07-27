@@ -1,13 +1,8 @@
+# Tokenized binary dataset & cache files
 *.bin
-*.pt
-*.pth
-*.safetensors
-*.gz
-*.png
-*.csv
-*.json
 shards/
-gpt2-fineweb-124m/
+fineweb_tokens.bin
 __pycache__/
 .ipynb_checkpoints/
 *.log
+
