@@ -224,6 +224,15 @@ def main():
                         "dev_loss": avg_dev_loss,
                         "learning_rate": lr
                     })
+                    
+                    # Periodic Checkpoint Saving (Guarantees weights are saved on disk at every eval step)
+                    accelerator.save_state(accelerate_dir)
+                    accelerator.save_model(model, "gpt2-fineweb-124m")
+                    if accelerator.is_main_process:
+                        with open(os.path.join(accelerate_dir, "training_state.json"), "w") as f:
+                            json.dump({"step": step, "max_steps": config.max_steps}, f, indent=2)
+                        with open("loss_history.json", "w") as f:
+                            json.dump(history, f, indent=2)
                     model.train()
 
     pbar.close()
