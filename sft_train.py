@@ -1,7 +1,11 @@
 """
 Supervised Fine-Tuning (SFT) / Instruction Tuning Script
 Fine-tunes the base pre-trained SOTA GPT-2 model into an instruction-following chat assistant.
-Uses ChatML formatting (<|im_start|> user / assistant <|im_end|>) with prompt token masking.
+Supports large-scale instruction datasets:
+  - HuggingFaceTB/smoltalk (~1.1 Million multi-turn ChatML conversations)
+  - HuggingFaceH4/ultrachat_200k (208k multi-turn conversations)
+  - tatsu-lab/alpaca (52k instruction pairs)
+Uses ChatML formatting (<|im_start|> user / assistant <|im_end|>) with prompt token loss masking.
 """
 
 import os
@@ -15,58 +19,89 @@ from datasets import load_dataset
 from accelerate import Accelerator
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Supervised Fine-Tuning (SFT) for GPT-2 SOTA")
+    parser = argparse.ArgumentParser(description="Large-Scale Supervised Fine-Tuning (SFT) for GPT-2 SOTA")
     parser.add_argument("--model-path", type=str, default="gpt2-fineweb-124m", help="Path to base model directory or HF repo")
-    parser.add_argument("--dataset-name", type=str, default="tatsu-lab/alpaca", help="Instruction dataset name")
+    parser.add_argument("--dataset-name", type=str, default="HuggingFaceTB/smoltalk", help="Instruction dataset name")
+    parser.add_argument("--dataset-config", type=str, default="all", help="Dataset subset config (e.g., 'all' for smoltalk)")
+    parser.add_argument("--max-samples", type=int, default=100000, help="Maximum training samples to load (set -1 for full dataset)")
     parser.add_argument("--output-dir", type=str, default="gpt2-sota-instruct", help="Directory to save fine-tuned instruct model")
-    parser.add_argument("--epochs", type=int, default=2, help="Number of SFT training epochs")
+    parser.add_argument("--epochs", type=int, default=1, help="Number of SFT training epochs")
     parser.add_argument("--batch-size", type=int, default=8, help="Per-device batch size")
     parser.add_argument("--grad-accum", type=int, default=4, help="Gradient accumulation steps")
-    parser.add_argument("--lr", type=float, default=3e-5, help="Peak learning rate for SFT")
+    parser.add_argument("--lr", type=float, default=2e-5, help="Peak learning rate for SFT")
     parser.add_argument("--max-len", type=int, default=512, help="Maximum sequence length")
     return parser.parse_args()
 
 class InstructionDataset(Dataset):
     """
-    Formated Instruction Dataset with Completion-Only Loss Masking.
-    Tokenizes:
-        <|im_start|>user\n{instruction}\n{input}<|im_end|>\n<|im_start|>assistant\n{output}<|im_end|>
-    Masks user prompt tokens with -100 so loss is calculated ONLY on assistant response tokens!
+    Formated Instruction Dataset supporting both multi-turn 'messages' and 'instruction/output' schemas
+    with Completion-Only Loss Masking (<|im_start|> tags).
     """
     def __init__(self, raw_data, tokenizer, max_len=512):
         self.samples = []
         
         for item in raw_data:
-            instruction = item.get("instruction", "").strip()
-            inp = item.get("input", "").strip()
-            output = item.get("output", "").strip()
-            
-            if not instruction or not output:
-                continue
+            # Handle multi-turn conversation format (e.g. smoltalk / ultrachat)
+            if "messages" in item and isinstance(item["messages"], list):
+                messages = item["messages"]
+                input_ids = []
+                labels = []
                 
-            user_text = f"Instruction: {instruction}" + (f"\nInput: {inp}" if inp else "")
-            
-            # Format ChatML strings
-            prompt_str = f"<|im_start|>user\n{user_text}<|im_end|>\n<|im_start|>assistant\n"
-            response_str = f"{output}<|im_end|>"
-            
-            prompt_ids = tokenizer.encode(prompt_str, add_special_tokens=False)
-            response_ids = tokenizer.encode(response_str, add_special_tokens=False)
-            
-            input_ids = prompt_ids + response_ids
-            if len(input_ids) > max_len:
-                input_ids = input_ids[:max_len]
-                # Re-calculate boundary if truncated
-                prompt_len = min(len(prompt_ids), max_len)
+                for msg in messages:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "").strip()
+                    if not content:
+                        continue
+                        
+                    turn_str = f"<|im_start|>{role}\n{content}<|im_end|>\n"
+                    turn_ids = tokenizer.encode(turn_str, add_special_tokens=False)
+                    
+                    input_ids.extend(turn_ids)
+                    if role == "assistant":
+                        labels.extend(turn_ids)
+                    else:
+                        labels.extend([-100] * len(turn_ids))
+                        
+                if not input_ids or not any(l != -100 for l in labels):
+                    continue
+                    
+                if len(input_ids) > max_len:
+                    input_ids = input_ids[:max_len]
+                    labels = labels[:max_len]
+                    
+                self.samples.append({
+                    "input_ids": torch.tensor(input_ids, dtype=torch.long),
+                    "labels": torch.tensor(labels, dtype=torch.long)
+                })
             else:
-                prompt_len = len(prompt_ids)
+                # Handle single-turn instruction/input/output format (e.g. alpaca / openorca)
+                instruction = item.get("instruction", "").strip()
+                inp = item.get("input", "").strip()
+                output = item.get("output", "").strip()
                 
-            labels = [-100] * prompt_len + input_ids[prompt_len:]
-            
-            self.samples.append({
-                "input_ids": torch.tensor(input_ids, dtype=torch.long),
-                "labels": torch.tensor(labels, dtype=torch.long)
-            })
+                if not instruction or not output:
+                    continue
+                    
+                user_text = f"Instruction: {instruction}" + (f"\nInput: {inp}" if inp else "")
+                prompt_str = f"<|im_start|>user\n{user_text}<|im_end|>\n<|im_start|>assistant\n"
+                response_str = f"{output}<|im_end|>"
+                
+                prompt_ids = tokenizer.encode(prompt_str, add_special_tokens=False)
+                response_ids = tokenizer.encode(response_str, add_special_tokens=False)
+                
+                input_ids = prompt_ids + response_ids
+                if len(input_ids) > max_len:
+                    input_ids = input_ids[:max_len]
+                    prompt_len = min(len(prompt_ids), max_len)
+                else:
+                    prompt_len = len(prompt_ids)
+                    
+                labels = [-100] * prompt_len + input_ids[prompt_len:]
+                
+                self.samples.append({
+                    "input_ids": torch.tensor(input_ids, dtype=torch.long),
+                    "labels": torch.tensor(labels, dtype=torch.long)
+                })
             
     def __len__(self):
         return len(self.samples)
@@ -104,9 +139,9 @@ def main():
     args = parse_args()
     accelerator = Accelerator(gradient_accumulation_steps=args.grad_accum, mixed_precision="bf16")
     
-    accelerator.print(f"=== SUPERVISED FINE-TUNING (SFT) ===")
+    accelerator.print(f"=== LARGE-SCALE SUPERVISED FINE-TUNING (SFT) ===")
     accelerator.print(f"Base Model: {args.model_path}")
-    accelerator.print(f"Dataset: {args.dataset_name}")
+    accelerator.print(f"Dataset: {args.dataset_name} (max_samples: {args.max_samples})")
     
     # Load tokenizer and model
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
@@ -116,7 +151,18 @@ def main():
         tokenizer.pad_token_id = tokenizer.eos_token_id
         
     # Load instruction dataset
-    raw_ds = load_dataset(args.dataset_name, split="train[:5000]") # Clean sample for fast convergence
+    try:
+        if args.dataset_config and args.dataset_name == "HuggingFaceTB/smoltalk":
+            raw_ds = load_dataset(args.dataset_name, args.dataset_config, split="train")
+        else:
+            raw_ds = load_dataset(args.dataset_name, split="train")
+    except Exception as e:
+        accelerator.print(f"Falling back to default split for dataset {args.dataset_name}: {e}")
+        raw_ds = load_dataset(args.dataset_name, split="train")
+        
+    if args.max_samples > 0 and len(raw_ds) > args.max_samples:
+        raw_ds = raw_ds.select(range(args.max_samples))
+        
     sft_ds = InstructionDataset(raw_ds, tokenizer, max_len=args.max_len)
     
     train_loader = DataLoader(
@@ -129,11 +175,11 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     
     num_training_steps = len(train_loader) * args.epochs // args.grad_accum
-    scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=int(0.05 * num_training_steps), num_training_steps=num_training_steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=int(0.03 * num_training_steps), num_training_steps=num_training_steps)
     
     model, optimizer, train_loader, scheduler = accelerator.prepare(model, optimizer, train_loader, scheduler)
     
-    accelerator.print(f"Starting SFT Training ({len(sft_ds)} samples, {args.epochs} epochs)...")
+    accelerator.print(f"Starting SFT Fine-Tuning ({len(sft_ds):,} processed samples, {args.epochs} epoch(s), {num_training_steps:,} optimizer steps)...")
     
     step = 0
     model.train()
@@ -153,10 +199,10 @@ def main():
                 
             if accelerator.sync_gradients:
                 step += 1
-                if step % 20 == 0 or step == num_training_steps:
-                    accelerator.print(f"Epoch [{epoch+1}/{args.epochs}] Step [{step}/{num_training_steps}] | SFT Loss: {loss.item():.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
+                if step % 50 == 0 or step == num_training_steps:
+                    accelerator.print(f"Epoch [{epoch+1}/{args.epochs}] Step [{step:,}/{num_training_steps:,}] | SFT Loss: {loss.item():.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
                     
-    accelerator.print("\n✓ SFT Fine-Tuning Complete!")
+    accelerator.print("\n✓ Large-Scale SFT Fine-Tuning Complete!")
     
     # Save fine-tuned instruct model
     if accelerator.is_main_process:
