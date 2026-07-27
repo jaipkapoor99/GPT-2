@@ -46,6 +46,8 @@ Features **Rotary Position Embeddings (RoPE)**, **Muon Newton-Schulz Matrix Opti
 ├── dataset.py            # Zero-Copy Memmap Sharded DataLoader
 ├── model.py              # GPT-2 Architecture (FlashAttention-2, SwiGLU FFN, Weight Tying)
 ├── train.py              # Distributed Pre-training Loop (Accelerate, bf16, torch.compile)
+├── eval.py               # Benchmark Suite (Perplexity, Zero-shot HellaSwag, Throughput)
+├── sample.py             # Autoregressive Generation CLI with Anti-Repetition Safeguards
 ├── generate.py           # Custom PyTorch Autoregressive Text Generation CLI
 ├── test_hf_generate.py   # Hugging Face Transformers + Safetensors Generation CLI
 ├── upload_to_hf.py       # Automated Hugging Face Model Hub Uploader
@@ -130,7 +132,23 @@ Or specify a custom Accelerate checkpoint directory / PyTorch weights file:
 accelerate launch train.py --load-checkpoint accelerate_checkpoint --max-steps 20000
 ```
 
-### 5. Upload Checkpoint to Hugging Face Hub
+### 5. Benchmark & Zero-Shot Evaluation Suite
+Evaluate validation loss/perplexity, zero-shot HellaSwag log-likelihood scoring, and autoregressive generation throughput using native Accelerate or Hugging Face `transformers`:
+```bash
+# Evaluate using Hugging Face transformers AutoModelForCausalLM
+python eval.py --use-hf --repo-id jaipkapoor99/gpt2-2026-sota
+
+# Evaluate local Accelerate checkpoint
+python eval.py --load-checkpoint accelerate_checkpoint --eval-batches 50
+```
+
+### 6. Interactive Text Generation with Anti-Repetition Safeguards
+Generate text with anti-repetition penalty (1.15), Top-k (50) & Top-p (0.9) nucleus sampling, and temperature control:
+```bash
+python sample.py --prompt "The future of artificial intelligence is" --repetition-penalty 1.15 --temperature 0.8
+```
+
+### 7. Upload Checkpoint to Hugging Face Hub
 To push your model weights (`model.safetensors`), configurations, and documentation directly to Hugging Face:
 ```bash
 python upload_to_hf.py
