@@ -80,7 +80,7 @@ def sample_sequence(
 
 def main():
     parser = argparse.ArgumentParser(description="GPT-2 Text Generation with Anti-Repetition Safeguards")
-    parser.add_argument("--prompt", type=str, default="The future of artificial intelligence is", help="Prompt text")
+    parser.add_argument("--prompt", type=str, default="Deep in the heart of the ancient forest", help="Prompt text")
     parser.add_argument("--max-new-tokens", type=int, default=100, help="Number of tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature")
     parser.add_argument("--top-k", type=int, default=50, help="Top-k filtering limit")
