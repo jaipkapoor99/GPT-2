@@ -52,7 +52,9 @@ def main():
     
     if os.path.exists(args.load_checkpoint):
         print(f"Loading trained weights from '{args.load_checkpoint}'...")
-        model.load_state_dict(torch.load(args.load_checkpoint, map_location=device))
+        state_dict = torch.load(args.load_checkpoint, map_location=device)
+        cleaned_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+        model.load_state_dict(cleaned_state_dict)
     else:
         print(f"Checkpoint '{args.load_checkpoint}' not found! Running generation with initial weights...")
         
