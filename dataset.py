@@ -80,9 +80,9 @@ def get_dataloaders(config: GPT2Config, accelerator):
     
     train_ds, dev_ds, test_ds = torch.utils.data.random_split(full_ds, [n_train, n_dev, n_test])
     
-    train_loader = DataLoader(train_ds, batch_size=config.B, shuffle=True, num_workers=0)
-    dev_loader   = DataLoader(dev_ds, batch_size=config.B, shuffle=False, num_workers=0)
-    test_loader  = DataLoader(test_ds, batch_size=config.B, shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_ds, batch_size=config.B, shuffle=True, num_workers=4, pin_memory=True)
+    dev_loader   = DataLoader(dev_ds, batch_size=config.B, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader  = DataLoader(test_ds, batch_size=config.B, shuffle=False, num_workers=4, pin_memory=True)
     
     train_loader, dev_loader, test_loader = accelerator.prepare(
         train_loader, dev_loader, test_loader

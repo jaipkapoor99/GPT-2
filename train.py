@@ -88,8 +88,13 @@ def main():
             
     print_parameter_breakdown(model, accelerator)
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1, betas=(0.9, 0.95))
+    torch.set_float32_matmul_precision('high')
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1, betas=(0.9, 0.95), fused=True)
     model, optimizer = accelerator.prepare(model, optimizer)
+    
+    # Enable PyTorch 2.0 TorchInductor Compilation for Speed Boost
+    accelerator.print("Compiling model graph with torch.compile()...")
+    model = torch.compile(model)
     
     model.train()
     step = 0
