@@ -21,6 +21,14 @@ from config import GPT2Config
 from model import GPT2
 from dataset import get_dataloaders
 
+def forward_pass(model, input_ids, labels=None):
+    """ Unified forward pass supporting both custom GPT2 model and Hugging Face transformers AutoModelForCausalLM """
+    if hasattr(model, "config") and hasattr(model.config, "model_type") and getattr(model.config, "model_type") == "gpt2" and not hasattr(model.config, "head_dim"):
+        out = model(input_ids=input_ids, labels=labels)
+        return out.logits, out.loss
+    else:
+        return model(input_ids, targets=labels) if labels is not None else model(input_ids)
+
 def evaluate_perplexity(model, dev_loader, accelerator, max_eval_batches=50):
     """ Evaluate average cross-entropy loss and calculate perplexity (PPL = exp(loss)) """
     model.eval()
@@ -29,7 +37,7 @@ def evaluate_perplexity(model, dev_loader, accelerator, max_eval_batches=50):
     
     with torch.no_grad():
         for xb, yb in tqdm(dev_loader, desc="Evaluating Perplexity", disable=not accelerator.is_main_process):
-            logits, loss = model(xb, yb)
+            logits, loss = forward_pass(model, xb, labels=yb)
             total_loss += loss.item()
             total_batches += 1
             if total_batches >= max_eval_batches:
@@ -62,7 +70,7 @@ def evaluate_hellaswag_sample(model, tokenizer, device="cuda"):
             x = torch.tensor([full_tokens[:-1]], dtype=torch.long, device=device)
             targets = torch.tensor([full_tokens[1:]], dtype=torch.long, device=device)
             
-            logits, _ = model(x, targets=x)
+            logits, _ = forward_pass(model, x, labels=targets)
             
             # Compute log likelihood of the continuation tokens
             ctx_len = len(context_tokens) - 1
@@ -86,7 +94,7 @@ def benchmark_inference_speed(model, tokenizer, config, prompt="The future of ar
     
     # Warmup pass
     with torch.no_grad():
-        model(x)
+        forward_pass(model, x)
         
     start_time = time.perf_counter()
     tokens_generated = 0
@@ -95,7 +103,7 @@ def benchmark_inference_speed(model, tokenizer, config, prompt="The future of ar
         for _ in range(max_tokens):
             context_indices = input_indices[-config.T:]
             x_step = torch.tensor([context_indices], dtype=torch.long, device=device)
-            logits, _ = model(x_step)
+            logits, _ = forward_pass(model, x_step)
             next_token = logits[:, -1, :].argmax(dim=-1).item()
             input_indices.append(next_token)
             tokens_generated += 1
@@ -107,8 +115,10 @@ def benchmark_inference_speed(model, tokenizer, config, prompt="The future of ar
     return tokens_generated, total_time, tokens_per_sec, tokenizer.decode(input_indices)
 
 def main():
-    parser = argparse.ArgumentParser(description="GPT-2 SOTA Benchmark & Evaluation Suite")
+    parser = argparse.ArgumentParser(description="GPT-2 SOTA Benchmark & Evaluation Suite (Transformers & Accelerate)")
+    parser.add_argument("--repo-id", type=str, default="jaipkapoor99/gpt2-2026-sota", help="Hugging Face repo ID or local model path for transformers AutoModelForCausalLM")
     parser.add_argument("--load-checkpoint", type=str, default="accelerate_checkpoint", help="Path to Accelerate checkpoint or safetensors dir")
+    parser.add_argument("--use-hf", action="store_true", help="Use Hugging Face transformers AutoModelForCausalLM for evaluation")
     parser.add_argument("--eval-batches", type=int, default=50, help="Number of dev batches for perplexity calculation")
     parser.add_argument("--bench-tokens", type=int, default=100, help="Number of tokens for throughput benchmark")
     args = parser.parse_args()
@@ -121,25 +131,32 @@ def main():
     accelerator.print("=======================================================")
     
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
-    config = GPT2Config(vocab_size=tokenizer.vocab_size)
-    model = GPT2(config)
-    model = accelerator.prepare(model)
     
-    if os.path.isdir(args.load_checkpoint):
-        accelerator.print(f"Loading Accelerate checkpoint state from '{args.load_checkpoint}'...")
-        accelerator.load_state(args.load_checkpoint)
-        accelerator.print("✓ State loaded successfully.")
-    elif os.path.exists("gpt2-fineweb-124m/model.safetensors"):
-        from safetensors.torch import load_file
-        accelerator.print("Loading weights from 'gpt2-fineweb-124m/model.safetensors'...")
-        state_dict = load_file("gpt2-fineweb-124m/model.safetensors")
-        unwrapped = accelerator.unwrap_model(model)
-        unwrapped.load_state_dict(state_dict)
-        accelerator.print("✓ Safetensors weights loaded successfully.")
+    if args.use_hf or os.path.exists(os.path.join("gpt2-fineweb-124m", "model.safetensors")):
+        from transformers import AutoModelForCausalLM
+        model_path = args.repo_id if args.use_hf else "gpt2-fineweb-124m"
+        accelerator.print(f"Loading model via Hugging Face `transformers` from '{model_path}'...")
+        try:
+            model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
+            accelerator.print("✓ Loaded Hugging Face `transformers` model successfully.")
+        except Exception as e:
+            accelerator.print(f"Failed to load HF model: {e}. Falling back to Accelerate model...")
+            config = GPT2Config(vocab_size=tokenizer.vocab_size)
+            model = GPT2(config)
+            model = accelerator.prepare(model)
+            if os.path.isdir(args.load_checkpoint):
+                accelerator.load_state(args.load_checkpoint)
     else:
-        accelerator.print("No checkpoint found! Evaluating initial model weights...")
-        
+        config = GPT2Config(vocab_size=tokenizer.vocab_size)
+        model = GPT2(config)
+        model = accelerator.prepare(model)
+        if os.path.isdir(args.load_checkpoint):
+            accelerator.print(f"Loading Accelerate checkpoint state from '{args.load_checkpoint}'...")
+            accelerator.load_state(args.load_checkpoint)
+            accelerator.print("✓ State loaded successfully.")
+            
     # 1. Dev Perplexity Evaluation
+    config = GPT2Config(vocab_size=tokenizer.vocab_size)
     _, dev_loader, _ = get_dataloaders(config, accelerator)
     dev_loss, dev_ppl = evaluate_perplexity(model, dev_loader, accelerator, max_eval_batches=args.eval_batches)
     
