@@ -57,8 +57,8 @@ def main():
     parser = argparse.ArgumentParser(description="GPT-2 Pre-training Pipeline")
     parser.add_argument("--from-pretrained", type=str, default=None, choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'],
                         help="Optionally load pre-trained OpenAI weights instead of training from scratch")
-    parser.add_argument("--resume", action="store_true", help="Resume training directly from local 'gpt2_model.pth' checkpoint")
-    parser.add_argument("--load-checkpoint", type=str, default=None, help="Path to local checkpoint file (e.g. gpt2_model.pth)")
+    parser.add_argument("--resume", action="store_true", help="Resume training using Accelerate state or local 'gpt2_model.pth'")
+    parser.add_argument("--load-checkpoint", type=str, default=None, help="Path to local checkpoint file or Accelerate checkpoint directory")
     parser.add_argument("--max-steps", type=int, default=3000, help="Total training steps")
     args = parser.parse_args()
 
@@ -84,20 +84,27 @@ def main():
     else:
         model = GPT2(config)
         ckpt_path = args.load_checkpoint or ("gpt2_model.pth" if args.resume else None)
-        if ckpt_path and os.path.exists(ckpt_path):
-            accelerator.print(f"Resuming training from checkpoint: '{ckpt_path}'...")
+        if ckpt_path and os.path.isfile(ckpt_path):
+            accelerator.print(f"Loading weights from PyTorch checkpoint: '{ckpt_path}'...")
             state_dict = torch.load(ckpt_path, map_location="cpu")
             cleaned_state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
             model.load_state_dict(cleaned_state_dict)
             accelerator.print(f"✓ Checkpoint weights successfully loaded into model!")
-        elif args.resume:
-            accelerator.print(f"⚠️ --resume passed but checkpoint '{ckpt_path}' not found! Starting training from scratch...")
             
     print_parameter_breakdown(model, accelerator)
     
     torch.set_float32_matmul_precision('high')
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1, betas=(0.9, 0.95), fused=True)
     model, optimizer = accelerator.prepare(model, optimizer)
+    
+    # Accelerate Native State Resumption (Model + Optimizer + RNG state)
+    accelerate_dir = "accelerate_checkpoint"
+    if args.resume or args.load_checkpoint:
+        dir_to_load = args.load_checkpoint if (args.load_checkpoint and os.path.isdir(args.load_checkpoint)) else accelerate_dir
+        if os.path.isdir(dir_to_load):
+            accelerator.print(f"Resuming full Accelerate training state (model + optimizer) from '{dir_to_load}'...")
+            accelerator.load_state(dir_to_load)
+            accelerator.print(f"✓ Full Accelerate training state restored successfully!")
     
     # Enable PyTorch 2.0 TorchInductor Compilation for Speed Boost
     accelerator.print("Compiling model graph with torch.compile()...")
@@ -168,6 +175,11 @@ def main():
     pbar.close()
     print_table_footer(accelerator)
     accelerator.print("\nPre-training Complete!")
+    
+    # Save Accelerate Native Multi-GPU State
+    accelerator.print("Saving full Accelerate state to 'accelerate_checkpoint'...")
+    accelerator.save_state(accelerate_dir)
+    accelerator.print("✓ Saved full Accelerate state.")
     
     # Save Clean Standard PyTorch Checkpoint (Main Process)
     if accelerator.is_main_process:

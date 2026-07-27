@@ -117,7 +117,17 @@ Start pre-training with PyTorch 2.0 compile and Hugging Face Accelerate:
 accelerate launch train.py --max-steps 10000
 ```
 
-### 4. Upload Checkpoint to Hugging Face Hub
+### 4. Resume Pre-training with Accelerate
+Resume full multi-GPU training state (model weights, optimizer state, LR schedule, and RNG state) seamlessly using Accelerate:
+```bash
+accelerate launch train.py --resume --max-steps 20000
+```
+Or specify a custom Accelerate checkpoint directory / PyTorch weights file:
+```bash
+accelerate launch train.py --load-checkpoint accelerate_checkpoint --max-steps 20000
+```
+
+### 5. Upload Checkpoint to Hugging Face Hub
 To push your model weights (`model.safetensors`), configurations, and documentation directly to Hugging Face:
 ```bash
 python upload_to_hf.py
