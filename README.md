@@ -1,6 +1,6 @@
 # GPT-2 (124M) Pre-training Pipeline from Scratch
 
-A high-performance PyTorch pre-training implementation of **GPT-2 (124M parameters)** trained on the **FineWeb-Edu** dataset from scratch, following Andrej Karpathy's *Neural Networks: Zero to Hero* course.
+A high-performance PyTorch pre-training implementation of **GPT-2 (124M parameters)** trained on the **FineWeb** dataset from scratch, following Andrej Karpathy's *Neural Networks: Zero to Hero* course.
 
 Features a **Zero-Copy Memory-Mapped Dataset pipeline**, **Hugging Face Accelerate integration with `bf16` mixed precision**, and **fused FlashAttention kernels**.
 
