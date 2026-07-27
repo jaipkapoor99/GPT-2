@@ -74,6 +74,7 @@ def main():
     accelerator.print(f"  Grad Accum Steps    : {GRAD_ACCUM_STEPS}")
     accelerator.print(f"  Tokens / Step       : {tokens_per_step:,}")
     accelerator.print(f"  Total Steps         : {config.max_steps:,}")
+    accelerator.print(f"  LR Schedule         : WSD (Warmup-Stable-Decay)")
     
     train_loader, dev_loader, _ = get_dataloaders(config, accelerator)
     
@@ -119,16 +120,20 @@ def main():
     
     pbar = tqdm(total=config.max_steps, desc="Pre-training GPT-2")
     
+    decay_start_step = int(0.8 * config.max_steps) # 80% stable phase, 20% decay phase
+    
     while step < config.max_steps:
         for xb, yb in train_loader:
             if step >= config.max_steps:
                 break
                 
-            # Cosine Learning Rate Schedule with Warmup
+            # WSD (Warmup-Stable-Decay) Learning Rate Schedule
             if step < config.warmup_steps:
                 lr = config.learning_rate * (step + 1) / config.warmup_steps
+            elif step < decay_start_step:
+                lr = config.learning_rate
             else:
-                decay_ratio = (step - config.warmup_steps) / (config.max_steps - config.warmup_steps)
+                decay_ratio = (step - decay_start_step) / max(1, config.max_steps - decay_start_step)
                 coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
                 lr = config.min_lr + coeff * (config.learning_rate - config.min_lr)
                 
