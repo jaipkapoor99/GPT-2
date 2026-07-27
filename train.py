@@ -83,6 +83,8 @@ def main():
     accelerator.print(f"  LR Schedule         : WSD (Warmup-Stable-Decay)")
     accelerator.print(f"  Optimizer           : {args.optimizer.upper()}")
     accelerator.print(f"  Positional Embed    : RoPE (Rotary Position Embeddings)")
+    accelerator.print(f"  QK Head Normalizing : QK-Norm (RMSNorm on Q and K heads)")
+    accelerator.print(f"  Logit Softcapping   : {config.logit_softcap} (Gemma 2 Standard)")
     accelerator.print(f"  Grad Checkpointing  : {'ENABLED (~60% VRAM savings)' if config.gradient_checkpointing else 'DISABLED'}")
     
     train_loader, dev_loader, _ = get_dataloaders(config, accelerator)

@@ -67,6 +67,13 @@ class CausalSelfAttention(nn.Module):
         self.c_attn = nn.Linear(config.C, q_dim + 2 * kv_dim, bias=False)
         self.c_proj = nn.Linear(config.C, config.C, bias=False)
         self.c_proj.NANOGPT_SCALE_INIT = 1
+        
+        if config.use_qk_norm:
+            self.q_norm = RMSNorm(self.head_dim)
+            self.k_norm = RMSNorm(self.head_dim)
+        else:
+            self.q_norm = None
+            self.k_norm = None
 
     def forward(self, x: torch.Tensor, rot_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         B, T, C = x.size()
@@ -81,6 +88,10 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
         
+        if self.q_norm is not None and self.k_norm is not None:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+
         if rot_emb is not None:
             cos, sin = rot_emb
             q = apply_rotary_emb(q, cos, sin)
@@ -195,9 +206,13 @@ class GPT2(nn.Module):
         
         if targets is not None:
             logits = self.lm_head(x)
+            if self.config.logit_softcap > 0.0:
+                logits = self.config.logit_softcap * torch.tanh(logits / self.config.logit_softcap)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         else:
             logits = self.lm_head(x[:, [-1], :])
+            if self.config.logit_softcap > 0.0:
+                logits = self.config.logit_softcap * torch.tanh(logits / self.config.logit_softcap)
             loss = None
             
         return logits, loss

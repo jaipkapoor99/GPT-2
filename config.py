@@ -26,6 +26,8 @@ class GPT2Config:
     gradient_checkpointing: bool = False # Activation checkpointing for memory optimization
     use_rope: bool = True       # Rotary Position Embeddings (LLaMA 3 / Qwen 2.5 standard)
     rope_base: float = 10000.0  # RoPE frequency base parameter
+    use_qk_norm: bool = True    # QK Head RMSNorm (Qwen 2.5 / Gemma 2 standard for loss stability)
+    logit_softcap: float = 30.0 # Logit softcapping (Gemma 2 standard to prevent logit explosion)
     vocab_size: Optional[int] = None # Dynamically populated from metadata or tokenizer
     head_dim: int = field(init=False)
 
