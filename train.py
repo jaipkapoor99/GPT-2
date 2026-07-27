@@ -166,17 +166,18 @@ def main():
     pbar = tqdm(total=config.max_steps, initial=resume_step, desc="Pre-training GPT-2")
     
     decay_start_step = int(0.8 * config.max_steps) # 80% stable phase, 20% decay phase
-    batches_seen = 0
+    
+    if resume_step > 0:
+        skip_count = (resume_step * GRAD_ACCUM_STEPS) % len(train_loader)
+        accelerator.print(f"Fast-forwarding data loader past {skip_count:,} batches in current epoch...")
+        active_dataloader = accelerator.skip_first_batches(train_loader, num_batches=skip_count)
+    else:
+        active_dataloader = train_loader
     
     while step < config.max_steps:
-        for xb, yb in train_loader:
+        for xb, yb in active_dataloader:
             if step >= config.max_steps:
                 break
-                
-            # Fast-forward DataLoader batches if resuming past completed steps
-            if batches_seen < resume_step * GRAD_ACCUM_STEPS:
-                batches_seen += 1
-                continue
                 
             # WSD (Warmup-Stable-Linear-Decay) Learning Rate Schedule
             if step < config.warmup_steps:
@@ -195,7 +196,12 @@ def main():
                 
             with accelerator.accumulate(model):
                 with accelerator.autocast():
-                    logits, loss = model(xb, yb)
+                    out = model(xb, yb)
+                    if hasattr(out, "loss") and out.loss is not None:
+                        loss = out.loss
+                        logits = out.logits
+                    else:
+                        logits, loss = out
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), 1.0)
@@ -218,7 +224,8 @@ def main():
                     dev_batches = 0
                     with torch.no_grad():
                         for xb_dev, yb_dev in dev_loader:
-                            _, dev_loss = model(xb_dev, yb_dev)
+                            dev_out = model(xb_dev, yb_dev)
+                            dev_loss = dev_out.loss if (hasattr(dev_out, "loss") and dev_out.loss is not None) else dev_out[1]
                             total_dev_loss += dev_loss.item()
                             dev_batches += 1
                             if dev_batches >= 20:
