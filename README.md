@@ -1,20 +1,22 @@
-# GPT-2 (124M) SOTA Pre-training Pipeline
+# GPT-2 (124M 2026 SOTA) Pre-training Pipeline
 
-A high-performance, modern PyTorch implementation of **GPT-2 (124M parameters)** pre-trained from scratch on the **Hugging Face FineWeb** dataset (`sample-10BT`), following Andrej Karpathy's *Neural Networks: Zero to Hero* course with 2026 State-of-the-Art (SOTA) LLM training techniques.
+A high-performance, modern PyTorch implementation of **GPT-2 (124M parameters)** pre-trained from scratch on the **Hugging Face FineWeb** dataset (`sample-10BT`), incorporating 2026 State-of-the-Art (SOTA) LLM training innovations.
 
-Features a **Zero-Copy Memory-Mapped Sharded Data Pipeline**, **SwiGLU FFN Activations**, **FlashAttention-2 Integration**, **PyTorch 2.0 Graph Compilation**, **`bf16` Mixed-Precision Acceleration**, and direct **Hugging Face Hub Integration (Safetensors)**.
+Features **Rotary Position Embeddings (RoPE)**, **Muon Newton-Schulz Matrix Optimizer**, **Grouped-Query Attention (GQA)**, **SwiGLU FFN Activations**, **RMSNorm**, **100% Bias-Free Linear Layers**, **WSD (Warmup-Stable-Decay) Schedule**, **Zero-Copy Memory-Mapped Data Pipeline**, **FlashAttention-2 Integration**, **PyTorch 2.0 Graph Compilation**, and **Hugging Face Accelerate & Safetensors Integration**.
 
 ---
 
 ## 🌟 Key Features & Architectural Enhancements
 
-- **Modernized FFN Architecture:** Replaced legacy GELU MLP with **SwiGLU Gated Linear Units** (as used in LLaMA 3 & Qwen 2.5), dynamically aligned to multiples of 64 for optimal GPU Tensor Core throughput.
-- **FlashAttention-2:** Leverages PyTorch's native `F.scaled_dot_product_attention` for $O(N)$ memory efficiency and high FLOP utilization.
+- **Rotary Position Embeddings (RoPE):** Replaced static positional embeddings with RoPE (LLaMA 3 / Qwen 2.5 standard) applied to $Q$ and $K$ heads, enabling zero-shot context window extension.
+- **Muon Newton-Schulz Matrix Optimizer:** Pre-training optimization using Keller Jordan's **Muon** (Momentum Orthogonalized by 5th-order Newton-Schulz iterations) for 2D body weights, paired with fused `AdamW` for 1D vectors/embeddings.
+- **Grouped-Query Attention (GQA):** 12 Query heads and 4 Key/Value heads (3:1 Query-to-KV ratio), reducing KV-cache memory usage during autoregressive generation by **3x**.
+- **Modernized SwiGLU FFN:** Replaced legacy GELU MLP with **SwiGLU Gated Linear Units** aligned to multiples of 64 for optimal GPU Tensor Core throughput.
+- **RMSNorm & Bias-Free Layers:** Standardized on Root Mean Square Layer Normalization (RMSNorm) and removed linear projection bias parameters across all layers (`bias=False`).
+- **Warmup-Stable-Decay (WSD) Schedule:** Replaced traditional cosine decay with WSD (80% stable phase, 20% cosine decay), allowing optimal checkpoint decay tuning.
+- **Activation Checkpointing:** Optional gradient checkpointing (`--gradient-checkpointing`) reducing GPU VRAM memory consumption by **~60%**.
 - **Zero-Copy Data Loader:** Memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead during multi-billion token streaming.
-- **TorchInductor Graph Compilation:** Accelerated execution graph compilation via `torch.compile()` with high-precision MatMul math (`torch.set_float32_matmul_precision('high')`).
-- **Distributed Training & Mixed Precision:** Built on Hugging Face `Accelerate` with native `bfloat16` precision and gradient accumulation.
-- **Safetensors & Hugging Face Hub Integration:** Native export to `model.safetensors` format hosted live on Hugging Face Hub ([`jaipkapoor99/gpt2-2026-sota`](https://huggingface.co/jaipkapoor99/gpt2-2026-sota) & [`jaipkapoor99/gpt2-124m-fineweb`](https://huggingface.co/jaipkapoor99/gpt2-124m-fineweb)).
-- **Advanced Optimization Options:** Includes standard AdamW ($\beta_1=0.9, \beta_2=0.95$, weight decay $0.1$) as well as experimental support for the **Muon** (Momentum Orthogonalized by Newton-Schulz) optimizer (`muon.py`).
+- **Safetensors & Hugging Face Hub Integration:** Native export to `model.safetensors` format hosted live on Hugging Face Hub ([`jaipkapoor99/gpt2-2026-sota`](https://huggingface.co/jaipkapoor99/gpt2-2026-sota)).
 
 ---
 
@@ -22,17 +24,18 @@ Features a **Zero-Copy Memory-Mapped Sharded Data Pipeline**, **SwiGLU FFN Activ
 
 | Parameter | Value | Description |
 | :--- | :--- | :--- |
-| **Model Parameters** | 123,545,088 (124M) | Standard GPT-2 Small parameter scale |
-| **Layers / Heads / Embed Dim** | 12 layers / 12 heads / 768 dim | Transformer core layout ($C=768, n_{head}=12$) |
-| **Head Dimension** | 64 | Dimension per attention head |
-| **Context Window ($T$)** | 1,024 tokens | Sequence length |
-| **Micro-Batch Size ($B$)** | 16 | Per-GPU batch size |
+| **Model Parameters** | 114,051,840 (114M) | GQA + Bias-Free SOTA 124M scale |
+| **Layers / Query Heads / KV Heads** | 12 layers / 12 Q-heads / 4 KV-heads | GQA Transformer layout ($C=768, n_{head}=12, n_{kv\_head}=4$) |
+| **Positional Embedding** | RoPE (Rotary) | Dynamic frequency base ($10,000$) |
+| **FFN Activation** | SwiGLU | Multiples of 64 Tensor-Core aligned |
+| **Normalization** | RMSNorm | $\epsilon=10^{-5}$ |
+| **Context Window ($T$)** | 1,024 tokens | Extendable sequence length |
+| **Micro-Batch Size ($B$)** | 16 | Per-GPU micro-batch size |
 | **Gradient Accumulation** | 8 steps | Effective batch size = 128 sequences (131,072 tokens/step) |
 | **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer (`HuggingFaceTB/SmolLM-135M`) |
 | **Precision** | BFloat16 (`bf16`) | Native mixed precision |
-| **Max Learning Rate** | $6 \times 10^{-4}$ | Cosine decay with 200 warmup steps |
-| **Min Learning Rate** | $6 \times 10^{-5}$ | $10\%$ final decay floor |
-| **Optimizer** | AdamW | $\beta_1=0.9, \beta_2=0.95$, weight decay = $0.1$ |
+| **LR Schedule** | WSD | Warmup-Stable-Decay (80% stable, 20% decay) |
+| **Optimizer** | Muon + AdamW | Newton-Schulz matrix optimizer + fused AdamW |
 
 ---
 

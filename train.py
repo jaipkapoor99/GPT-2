@@ -26,18 +26,21 @@ from muon import Muon
 def print_parameter_breakdown(model: GPT2, accelerator: Accelerator):
     unwrapped = accelerator.unwrap_model(model)
     wte_params = sum(p.numel() for p in unwrapped.transformer.wte.parameters())
-    wpe_params = sum(p.numel() for p in unwrapped.transformer.wpe.parameters())
+    wpe_params = sum(p.numel() for p in unwrapped.transformer.wpe.parameters()) if not unwrapped.config.use_rope else 0
     blocks_params = sum(p.numel() for p in unwrapped.transformer.h.parameters())
     ln_f_params = sum(p.numel() for p in unwrapped.transformer.ln_f.parameters())
     total_params = sum(p.numel() for p in unwrapped.parameters())
     
     accelerator.print("\n===========================================")
-    accelerator.print("  GPT-2 (124M) DETAILED PARAMETER BREAKDOWN")
+    accelerator.print("  GPT-2 (124M 2026 SOTA) PARAMETER BREAKDOWN")
     accelerator.print("===========================================")
     accelerator.print(f"  Token Embeddings (wte)    : {wte_params:,} ({wte_params/total_params*100:.1f}%)")
-    accelerator.print(f"  Position Embeddings (wpe) : {wpe_params:,} ({wpe_params/total_params*100:.1f}%)")
-    accelerator.print(f"  12 Transformer Blocks (h) : {blocks_params:,} ({blocks_params/total_params*100:.1f}%)")
-    accelerator.print(f"  Final LayerNorm (ln_f)    : {ln_f_params:,} (<0.1%)")
+    if unwrapped.config.use_rope:
+        accelerator.print(f"  Positional Embeddings     : RoPE (Rotary Position Embeddings - 0 static params)")
+    else:
+        accelerator.print(f"  Position Embeddings (wpe) : {wpe_params:,} ({wpe_params/total_params*100:.1f}%)")
+    accelerator.print(f"  12 Transformer Blocks (h) : {blocks_params:,} ({blocks_params/total_params*100:.1f}%) [GQA + SwiGLU + RMSNorm]")
+    accelerator.print(f"  Final RMSNorm (ln_f)      : {ln_f_params:,} (<0.1%)")
     accelerator.print(f"  Output LM Head (lm_head)  : 0 (Weight Tied with wte)")
     accelerator.print("-------------------------------------------")
     accelerator.print(f"  TOTAL TRAINABLE PARAMETERS: {total_params:,}")
