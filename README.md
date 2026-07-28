@@ -196,5 +196,21 @@ Training logs are saved in real-time to `loss_history.json` and `loss_history.cs
 
 ## 📜 Acknowledgments
 - Andrej Karpathy for the inspiring [*Neural Networks: Zero to Hero*](https://github.com/karpathy/build-nanogpt) course and `nanoGPT` project.
-- Keller Jordan for pioneering the [Muon](https://github.com/KellerJordan/Muon) optimizer and algorithmic speedrun innovations.
+- Keller Jordan et al. for pioneering the [Muon](https://github.com/KellerJordan/Muon) optimizer and algorithmic speedrun innovations.
 - Hugging Face for the [FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb) dataset and `transformers` ecosystem.
+
+---
+
+## 📚 Citation
+
+If you use the Muon optimizer or this codebase, please cite the original Muon work:
+
+```bibtex
+@misc{jordan2024muon,
+  author       = {Keller Jordan and Yuchen Jin and Vlado Boza and You Jiacheng and
+                  Franz Cesista and Laker Newhouse and Jeremy Bernstein},
+  title        = {Muon: An optimizer for hidden layers in neural networks},
+  year         = {2024},
+  url          = {https://kellerjordan.github.io/posts/muon/}
+}
+```
