@@ -243,9 +243,9 @@ python upload_to_hf.py
 
 ## 📈 Visualizing Training Loss
 
-Training logs are saved in real-time to `loss_history.json` and `loss_history.csv`. A vector graphic plot of the pre-training loss trajectory is rendered to [`loss_curve.svg`](file:///home/jaipkapoor99/Kaggle/Andrej%20Karpathy%20Course/GPT-2/loss_curve.svg).
+Training logs are saved in real-time to `loss_history.json` and `loss_history.csv`. Pre-training loss trajectory plot is available in both vector [`loss_curve.svg`](file:///home/jaipkapoor99/Kaggle/Andrej%20Karpathy%20Course/GPT-2/loss_curve.svg) and high-res [`loss_curve.png`](file:///home/jaipkapoor99/Kaggle/Andrej%20Karpathy%20Course/GPT-2/loss_curve.png).
 
-![Loss Curve](loss_curve.svg)
+![Pre-Training Loss Curve](loss_curve.png)
 
 ---
 
