@@ -14,3 +14,4 @@ __pycache__/
 .ipynb_checkpoints/
 *.log
 gpt2-fineweb-124m/
+gpt2-sota-instruct/
