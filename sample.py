@@ -97,7 +97,7 @@ def main():
     if args.use_hf:
         model_path = args.repo_id
         print(f"Loading Hugging Face model from '{model_path}'...")
-        model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
+        model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True).to(device)
     else:
         config = GPT2Config(vocab_size=tokenizer.vocab_size)
         model = GPT2(config).to(device)

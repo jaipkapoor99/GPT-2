@@ -13,5 +13,7 @@ accelerate_checkpoint/
 __pycache__/
 .ipynb_checkpoints/
 *.log
+evaluation_results*.json
+eval_results.json
 gpt2-fineweb-124m/
 gpt2-sota-instruct/

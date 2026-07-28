@@ -47,10 +47,10 @@ Evaluated directly from Hugging Face Model Hub (`jaipkapoor99/gpt2-2026-sota`) u
 | :--- | :--- | :--- | :--- | :--- |
 | **Validation Loss** | Cross-Entropy | 3.5300 | **3.1422** 🏆 | 🚀 **New All-Time Record-Low Validation Loss** |
 | **Validation Perplexity** | Perplexity | 34.12 | **23.15** | ⚡ **-10.97 Perplexity Drop** |
-| **HellaSwag** (Commonsense Reasoning) | `acc_norm` | 29.50% | **26.61%** | 🔄 *100% Full Dataset Complete (10.00B tokens)* |
-| **HellaSwag** (Commonsense Reasoning) | `acc` | 28.20% | **26.14%** | 🔄 *100% Full Dataset Complete (10.00B tokens)* |
-| **ARC-Easy** (Science QA) | `acc_norm` | 25.00% | **26.89%** | 🚀 **Outperforms OpenAI GPT-2 Baseline** |
-| **ARC-Easy** (Science QA) | `acc` | 24.10% | **25.93%** | 🚀 **Outperforms OpenAI GPT-2 Baseline** |
+| **HellaSwag** (Commonsense Reasoning) | `acc_norm` | 29.50% | **26.67%** | 🔄 *100% Full Dataset Complete (10.00B tokens)* |
+| **HellaSwag** (Commonsense Reasoning) | `acc` | 28.20% | **26.12%** | 🔄 *100% Full Dataset Complete (10.00B tokens)* |
+| **ARC-Easy** (Science QA) | `acc_norm` | 25.00% | **25.25%** | 🚀 **Outperforms OpenAI GPT-2 Baseline** |
+| **ARC-Easy** (Science QA) | `acc` | 24.10% | **25.42%** | 🚀 **Outperforms OpenAI GPT-2 Baseline** |
 
 ---
 
@@ -61,22 +61,22 @@ Generated directly by **Our 2026 SOTA GPT-2 (124M)** using nucleus sampling (`to
 ### 1. 🤖 Technology & Artificial Intelligence
 > **Prompt:** `The future of artificial intelligence is`
 >
-> **Generated:** *...not yet a decade away, but there are some interesting opportunities for both to advance the field of AI and the digital world. I am always interested in how technology can improve human life by bringing together natural and human resources from within an organization, such as software development or product management, to make them more efficient and useful for their customers and employees.*
+> **Generated:** *...going to be even bigger than that. And there are a lot of things that we can do with AI, but the real challenge for us is not in the ability to predict how things will behave from different points of view, but rather how they’ll behave from different point of view.” In this article, Wired’s Jeff Williams shares his thoughts on how humans can use Artificial Intelligence (AI) and Machine Learning (ML) to make smarter decisions about human behavior.*
 
 ### 2. 🌌 Astronomy & Astrophysics
-> **Prompt:** `Beyond the outer edges of the solar system`
+> **Prompt:** `Beyond the outer edges of the solar system,`
 >
-> **Generated:** *...the gravitational waves and magnetic fields produce a strong pressure in which to push out massive gravitational waves. We can see that when the Earth is under an Earthly pull, it has two primary functions: It controls the direction of its axis from the center of the planet to the edge of the Earth; It can also control the...*
+> **Generated:** *...and which are often used for solar radiation. The outer surfaces of stars can vary greatly in their color. This is because there are no known signs of a darkening or dimming of star formation, and neither does the outer surface of a star. However, when one looks at some of the visible objects that appear on our solar system, such as stars or planets, we can see visible changes in the size of these objects.*
 
 ### 3. 📜 History & Human Civilization
 > **Prompt:** `The journey of human civilization has always been`
 >
-> **Generated:** *...one that has taken us into the future. But that is not exactly what we have come to expect in this world. In 2016, I think there was a need for an "immediate" return of humanity to our species' past glory days and more, as well as being able to continue with other efforts that were already...*
+> **Generated:** *...a long one. It is not without its flaws and limitations, but the end result is a remarkable story that we can’t help but cherish. A tale that many might think of as a ‘new world’ – or a ‘life’. But what makes it so special is its complexity. This book represents an extraordinary journey. We are given a wonderful and unexpected insight into this ancient world...*
 
-### 4. 🌿 Nature & Health
-> **Prompt:** `Deep in the heart of the ancient forest`
+### 4. 🌿 Nature & Hospitality
+> **Prompt:** `Deep in the heart of the ancient forest,`
 >
-> **Generated:** *...it can be seen in many parts of the world. And I say that to make you feel good for this time. And I am sure you’ll find something very satisfying about eating raw food and living with those tiny, little pieces of meat. In this episode, we share some of our best tips on how to eat raw! Eat foods that are natural, high in...*
+> **Generated:** *...this unique home will offer you a perfect retreat for relaxation. The fully equipped kitchen, spacious terrace and large open plan living area is ideal for entertaining guests or a relaxing break from it all. The newly built guest accommodation offers everything you need: Fully furnished studio or 3 bedroom apartment...*
 
 ---
 
@@ -100,11 +100,20 @@ Generated directly by **Our 2026 SOTA GPT-2 (124M)** using nucleus sampling (`to
 
 ---
 
-## 📦 Quickstart: Using Pre-trained Weights from Hugging Face
+## 📦 Quickstart: Text Generation
 
-### Option A: Using Hugging Face `transformers`
+> [!NOTE]  
+> **Generation Method Status:** Local generation via `sample.py` is the primary, fully verified generation pipeline. The Hugging Face `transformers` integration (`AutoModelForCausalLM` / `test_hf_generate.py`) is currently **in active development**.
 
-The pre-trained model weights are hosted on Hugging Face Model Hub in `safetensors` format:
+### Option A: Local Generation CLI (Recommended)
+
+Generate text with anti-repetition penalty (1.15), Top-k (50) & Top-p (0.9) nucleus sampling, and temperature control using local model weights:
+
+```bash
+python sample.py --prompt "The future of artificial intelligence is" --repetition-penalty 1.15 --temperature 0.8
+```
+
+### Option B: Hugging Face `transformers` Pipeline (In Active Development)
 
 ```python
 import torch
@@ -113,31 +122,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 model_id = "jaipkapoor99/gpt2-2026-sota"
 
 # Load model and tokenizer
-model = AutoModelForCausalLM.from_pretrained(model_id).to("cuda")
-tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
+model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True).to("cuda")
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
 prompt = "The future of artificial intelligence is"
 inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
 
 with torch.no_grad():
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=60,
-        do_sample=True,
-        temperature=0.7,
-        top_k=50,
-        pad_token_id=tokenizer.eos_token_id
-    )
+    outputs = model.generate(**inputs, max_new_tokens=60, do_sample=True, temperature=0.7, top_k=50, use_cache=False)
 
 print(tokenizer.decode(outputs[0], skip_special_tokens=True))
-```
-
-### Option B: Running the Local CLI Test Script
-
-Run our test script that automatically downloads the Safetensors checkpoint from Hugging Face and runs generation:
-
-```bash
-python test_hf_generate.py "Arrakis is a desert planet where" --max-tokens 100 --temperature 0.8
 ```
 
 ---
@@ -172,13 +166,10 @@ accelerate launch train.py --load-checkpoint accelerate_checkpoint --max-steps 2
 ```
 
 ### 5. Standard Zero-Shot Benchmarking (`lm-evaluation-harness`)
-Evaluate HellaSwag, ARC-Easy, LAMBADA, and MMLU directly on your exported Hugging Face model directory or Hub repository:
+Evaluate HellaSwag, ARC-Easy, LAMBADA, and MMLU directly using our built-in benchmark script (which wraps `lm-evaluation-harness`):
 ```bash
-# Evaluate local model directory
-lm_eval --model hf --model_args pretrained=gpt2-fineweb-124m --tasks hellaswag,arc_easy,lambada_openai --device cuda
-
 # Evaluate published Hugging Face Hub repository
-lm_eval --model hf --model_args pretrained=jaipkapoor99/gpt2-2026-sota --tasks hellaswag,arc_easy --device cuda
+python benchmark.py --tasks hellaswag,arc_easy
 ```
 
 ### 6. Interactive Text Generation with Anti-Repetition Safeguards

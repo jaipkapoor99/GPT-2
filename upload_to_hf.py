@@ -59,6 +59,22 @@ def main():
         commit_message="Upload model card MODEL_CARD.md"
     )
     
+    print("\n3. Uploading generation and benchmark scripts...")
+    api.upload_file(
+        path_or_fileobj=os.path.join(local_dir, "test_hf_generate.py"),
+        path_in_repo="test_hf_generate.py",
+        repo_id=repo_id,
+        repo_type="model",
+        commit_message="Upload spectacular interactive generation script"
+    )
+    api.upload_file(
+        path_or_fileobj=os.path.join(local_dir, "benchmark.py"),
+        path_in_repo="benchmark.py",
+        repo_id=repo_id,
+        repo_type="model",
+        commit_message="Upload lm-eval benchmark script"
+    )
+    
     print(f"\n✓ UPLOAD COMPLETE!")
     print(f"Your weights and model metadata are live at: https://huggingface.co/{repo_id}")
 
