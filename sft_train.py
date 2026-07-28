@@ -96,7 +96,12 @@ class InstructionDataset(Dataset):
                 else:
                     prompt_len = len(prompt_ids)
                     
+                if not response_ids or prompt_len >= max_len:
+                    continue
+                    
                 labels = [-100] * prompt_len + input_ids[prompt_len:]
+                if not any(l != -100 for l in labels):
+                    continue
                 
                 self.samples.append({
                     "input_ids": torch.tensor(input_ids, dtype=torch.long),
@@ -145,10 +150,11 @@ def main():
     
     # Load tokenizer and model
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(args.model_path, trust_remote_code=True)
-    
     if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer.pad_token_id = 0
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+        
+    model = AutoModelForCausalLM.from_pretrained(args.model_path, trust_remote_code=True)
         
     # Load instruction dataset
     try:
@@ -169,7 +175,7 @@ def main():
         sft_ds, 
         batch_size=args.batch_size, 
         shuffle=True, 
-        collate_fn=lambda b: pad_collate_fn(b, pad_token_id=tokenizer.pad_token_id)
+        collate_fn=lambda b: pad_collate_fn(b, pad_token_id=pad_id)
     )
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
@@ -199,7 +205,7 @@ def main():
                 
             if accelerator.sync_gradients:
                 step += 1
-                if step % 50 == 0 or step == num_training_steps:
+                if step % 10 == 0 or step == num_training_steps:
                     accelerator.print(f"Epoch [{epoch+1}/{args.epochs}] Step [{step:,}/{num_training_steps:,}] | SFT Loss: {loss.item():.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
                     
     accelerator.print("\n✓ Large-Scale SFT Fine-Tuning Complete!")
