@@ -111,6 +111,14 @@ def main():
     
     # Optimizer Construction (Accelerated Muon + Selective Zero-WD AdamW)
     if args.optimizer == "muon":
+        if not torch.distributed.is_initialized():
+            backend = "nccl" if torch.cuda.is_available() else "gloo"
+            torch.distributed.init_process_group(
+                backend=backend,
+                rank=0,
+                world_size=1,
+                init_method="tcp://127.0.0.1:29505"
+            )
         muon_params = [p for name, p in model.named_parameters() if p.ndim == 2 and 'wte' not in name and 'wpe' not in name]
         adamw_decay_params = [p for name, p in model.named_parameters() if p.ndim < 2 and 'wte' not in name and 'wpe' not in name and p.requires_grad]
         adamw_nodecay_params = [p for name, p in model.named_parameters() if ('wte' in name or 'wpe' in name) and p.requires_grad]
