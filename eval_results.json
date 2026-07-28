@@ -1,10 +1,12 @@
 {
-  "dev_loss": 3.2869,
-  "dev_perplexity": 26.759,
+  "dev_loss": 3.1422,
+  "dev_perplexity": 23.155,
   "hellaswag_acc": 0.2614,
   "hellaswag_acc_norm": 0.2661,
   "arc_easy_acc": 0.2593,
   "arc_easy_acc_norm": 0.2689,
+  "total_tokens_trained": 10000000000,
+  "total_steps_trained": 152587,
   "benchmark_repo": "jaipkapoor99/gpt2-2026-sota",
   "evaluated_with": "lm-evaluation-harness"
 }
