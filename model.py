@@ -1,20 +1,24 @@
 """
 GPT-2 (124M) PyTorch Model Module (2026 SOTA Standards)
 Implements:
-1. FlashAttention-2 (F.scaled_dot_product_attention)
+1. FlashAttention-2 (F.scaled_dot_product_attention) with smart context enforcement
 2. SwiGLU Gated FeedForward Network (LLaMA 3 / Qwen 2.5 architecture)
 3. Pre-LayerNorm Residual Skip Connections
 4. Weight Tying (lm_head.weight = wte.weight)
 5. 1 / sqrt(2*N) Residual Parameter Initialization
 6. Pre-trained weight loader from official OpenAI weights
+7. KV Caching for O(N) autoregressive generation
+8. Zero-Copy Grouped-Query Attention (GQA)
+9. Vocab Size padding (multiple of 64) for Tensor Cores
 """
 
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from config import GPT2Config
+from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
 def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     """ Apply Rotary Position Embedding (RoPE) to input tensor x """
@@ -42,10 +46,10 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("cos_cached", emb.cos()[None, None, :, :], persistent=False)
         self.register_buffer("sin_cached", emb.sin()[None, None, :, :], persistent=False)
 
-    def forward(self, x: torch.Tensor, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        if seq_len > self.cos_cached.size(2):
-            self._build_cache(seq_len)
-        return self.cos_cached[:, :, :seq_len, :], self.sin_cached[:, :, :seq_len, :]
+    def forward(self, x: torch.Tensor, seq_len: int, offset: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
+        if seq_len + offset > self.cos_cached.size(2):
+            self._build_cache(seq_len + offset)
+        return self.cos_cached[:, :, offset:seq_len+offset, :], self.sin_cached[:, :, offset:seq_len+offset, :]
 
 class CausalSelfAttention(nn.Module):
     """ High-performance Grouped-Query Attention (GQA) with RoPE using PyTorch FlashAttention """
@@ -75,7 +79,7 @@ class CausalSelfAttention(nn.Module):
             self.q_norm = None
             self.k_norm = None
 
-    def forward(self, x: torch.Tensor, rot_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, rot_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         B, T, C = x.size()
         qkv = self.c_attn(x)
         
@@ -96,16 +100,31 @@ class CausalSelfAttention(nn.Module):
             cos, sin = rot_emb
             q = apply_rotary_emb(q, cos, sin)
             k = apply_rotary_emb(k, cos, sin)
+            
+        if past_key_value is not None:
+            past_k, past_v = past_key_value
+            k = torch.cat((past_k, k), dim=2)
+            v = torch.cat((past_v, v), dim=2)
+            
+        new_past_key_value = (k, v)
 
         if self.num_queries_per_kv > 1:
-            k = k.repeat_interleave(self.num_queries_per_kv, dim=1)
-            v = v.repeat_interleave(self.num_queries_per_kv, dim=1)
+            # Zero-Copy GQA expansion using unsqueeze/expand/reshape instead of repeat_interleave
+            k_len = k.size(2)
+            k = k.unsqueeze(2).expand(B, self.n_kv_head, self.num_queries_per_kv, k_len, self.head_dim).reshape(B, self.n_head, k_len, self.head_dim)
+            v = v.unsqueeze(2).expand(B, self.n_kv_head, self.num_queries_per_kv, k_len, self.head_dim).reshape(B, self.n_head, k_len, self.head_dim)
             
         dropout_p = self.dropout_p if self.training else 0.0
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=dropout_p)
+        
+        # Enforce FlashAttention during training or full-sequence passes, but fallback for decoding (T=1)
+        if self.training or q.size(2) > 1:
+            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+                y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=dropout_p)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=False, dropout_p=dropout_p)
         
         y = y.transpose(1, 2).contiguous().view(B, T, C)
-        return self.c_proj(y)
+        return self.c_proj(y), new_past_key_value
 
 class SwiGLUMLP(nn.Module):
     """ Modern SwiGLU FeedForward Network (used in LLaMA 3, Qwen 2.5, & Mistral) """
@@ -142,10 +161,11 @@ class Block(nn.Module):
         self.ln_2 = RMSNorm(config.C)
         self.mlp  = SwiGLUMLP(config)
 
-    def forward(self, x: torch.Tensor, rot_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
-        x = x + self.attn(self.ln_1(x), rot_emb=rot_emb)
+    def forward(self, x: torch.Tensor, rot_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        attn_out, present_key_value = self.attn(self.ln_1(x), rot_emb=rot_emb, past_key_value=past_key_value)
+        x = x + attn_out
         x = x + self.mlp(self.ln_2(x))
-        return x
+        return x, present_key_value
 
 class GPT2(nn.Module):
     """ Full GPT-2 (124M) Language Model Class with RMSNorm, RoPE, & GQA """
@@ -153,14 +173,17 @@ class GPT2(nn.Module):
         super().__init__()
         self.config = config
         
+        # Padded vocab size for Tensor Core efficiency
+        self.vocab_size = math.ceil(config.vocab_size / 64) * 64
+        
         self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.C),
+            wte = nn.Embedding(self.vocab_size, config.C),
             wpe = nn.Embedding(config.T, config.C),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = RMSNorm(config.C),
         ))
-        self.lm_head = nn.Linear(config.C, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.C, self.vocab_size, bias=False)
 
         if config.use_rope:
             self.rotary_emb = RotaryEmbedding(config.head_dim, max_seq_len=config.T, base=config.rope_base)
@@ -190,25 +213,36 @@ class GPT2(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx: torch.Tensor, targets: torch.Tensor = None):
+    def forward(self, idx: torch.Tensor, targets: torch.Tensor = None, use_cache: bool = False, past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None):
         B, T = idx.size()
-        assert T <= self.config.T, f"Cannot forward sequence length {T}, model block size is {self.config.T}"
+        
+        past_length = past_key_values[0][0].size(2) if past_key_values is not None else 0
+        assert T + past_length <= self.config.T, f"Cannot forward sequence length {T + past_length}, model block size is {self.config.T}"
         
         tok_emb = self.transformer.wte(idx)
         if self.config.use_rope and self.rotary_emb is not None:
             x = self.transformer.drop(tok_emb)
-            rot_emb = self.rotary_emb(x, T)
+            rot_emb = self.rotary_emb(x, T, offset=past_length)
         else:
-            pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
+            pos = torch.arange(past_length, past_length + T, dtype=torch.long, device=idx.device)
             pos_emb = self.transformer.wpe(pos)
             x = self.transformer.drop(tok_emb + pos_emb)
             rot_emb = None
         
-        for block in self.transformer.h:
+        present_key_values = [] if use_cache else None
+        
+        for i, block in enumerate(self.transformer.h):
+            past_kv = past_key_values[i] if past_key_values is not None else None
+            
             if self.config.gradient_checkpointing and self.training:
-                x = torch.utils.checkpoint.checkpoint(block, x, rot_emb, use_reentrant=False)
+                # Cache is not supported with gradient checkpointing
+                x, _ = torch.utils.checkpoint.checkpoint(block, x, rot_emb, None, use_reentrant=False)
             else:
-                x = block(x, rot_emb=rot_emb)
+                x, present_kv = block(x, rot_emb=rot_emb, past_key_value=past_kv)
+                
+            if use_cache:
+                present_key_values.append(present_kv)
+                
         x = self.transformer.ln_f(x)
         
         logits = self.lm_head(x)
@@ -217,10 +251,74 @@ class GPT2(nn.Module):
             
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             
-        from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
+        if use_cache:
+            return CausalLMOutputWithCrossAttentions(loss=loss, logits=logits, past_key_values=present_key_values)
         return CausalLMOutputWithCrossAttentions(loss=loss, logits=logits)
+
+    def configure_optimizers(self, optimizer_type: str, learning_rate: float, device_type: str = 'cuda'):
+        """ Configure AdamW or Hybrid Muon + AdamW optimizers """
+        from muon import Muon
+        if optimizer_type == "muon":
+            if not torch.distributed.is_initialized():
+                backend = "nccl" if device_type == "cuda" else "gloo"
+                torch.distributed.init_process_group(
+                    backend=backend,
+                    rank=0,
+                    world_size=1,
+                    init_method="tcp://127.0.0.1:29505"
+                )
+            muon_params = [p for name, p in self.named_parameters() if p.ndim == 2 and 'wte' not in name and 'wpe' not in name]
+            adamw_decay_params = [p for name, p in self.named_parameters() if p.ndim < 2 and 'wte' not in name and 'wpe' not in name and p.requires_grad]
+            adamw_nodecay_params = [p for name, p in self.named_parameters() if ('wte' in name or 'wpe' in name) and p.requires_grad]
+            
+            adamw_groups = [
+                {"params": adamw_decay_params, "weight_decay": 0.1},
+                {"params": adamw_nodecay_params, "weight_decay": 0.0}
+            ]
+            
+            optimizer_muon = Muon(muon_params, lr=0.04, momentum=0.95)
+            optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=learning_rate, betas=(0.9, 0.95), fused=True)
+            return optimizer_muon, optimizer_adamw
+        else:
+            decay_params = [p for name, p in self.named_parameters() if p.ndim >= 2 and 'wte' not in name]
+            nodecay_params = [p for name, p in self.named_parameters() if p.ndim < 2 or 'wte' in name]
+            adamw_groups = [
+                {"params": decay_params, "weight_decay": 0.1},
+                {"params": nodecay_params, "weight_decay": 0.0}
+            ]
+            optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=learning_rate, betas=(0.9, 0.95), fused=True)
+            return None, optimizer_adamw
+
+    @torch.no_grad()
+    def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: Optional[int] = None):
+        """ Generate autoregressively given a prompt idx using KV caching (O(N)) """
+        past_key_values = None
+        for i in range(max_new_tokens):
+            if past_key_values is None:
+                # Pre-fill phase: process the entire prompt
+                idx_cond = idx if idx.size(1) <= self.config.T else idx[:, -self.config.T:]
+            else:
+                # Decoding phase: process only the last generated token
+                idx_cond = idx[:, -1:]
+                
+            out = self(idx_cond, use_cache=True, past_key_values=past_key_values)
+            logits = out.logits[:, -1, :self.config.vocab_size] # Strip padded vocab
+            past_key_values = out.past_key_values
+            
+            if temperature != 1.0:
+                logits = logits / temperature
+                
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+                
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, idx_next), dim=1)
+            
+        return idx
 
     @classmethod
     def from_pretrained(cls, model_type: str = "gpt2"):
@@ -256,6 +354,10 @@ class GPT2(nn.Module):
                 if sd_hf[k].shape == sd[k].shape:
                     with torch.no_grad():
                         sd[k].copy_(sd_hf[k])
+                elif k == 'transformer.wte.weight' or k == 'lm_head.weight':
+                    with torch.no_grad():
+                        # Copy only the first vocab_size elements to handle vocab padding
+                        sd[k][:sd_hf[k].shape[0], :].copy_(sd_hf[k])
                     
         print(f"Successfully loaded official {model_type} weights!")
         return model

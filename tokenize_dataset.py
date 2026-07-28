@@ -8,28 +8,28 @@ from tqdm import tqdm
 
 def main(shard_size_tokens=100_000_000, max_shards=100):
     """
-    Production-grade script to stream ALL of FineWeb sample-10BT (10 Billion Tokens)
+    Production-grade script to stream ALL of FineWeb-Edu sample-10BT (10 Billion Tokens)
     and save them into compact 100M token binary shards (uint16 format).
     Automatically skips existing completed shards when resumed!
     """
-    output_dir = "shards"
+    output_dir = "shards_edu"
     os.makedirs(output_dir, exist_ok=True)
     
     # Detect existing completed shards to resume cleanly
-    existing_shards = sorted(glob.glob(os.path.join(output_dir, "fineweb_shard_*.bin")))
+    existing_shards = sorted(glob.glob(os.path.join(output_dir, "fineweb_edu_shard_*.bin")))
     start_shard = len(existing_shards)
     
-    print(f"=== FULL FINEWEB 10B TOKEN PRE-TOKENIZATION SCRIPT ===")
+    print(f"=== FULL FINEWEB-EDU 10B TOKEN PRE-TOKENIZATION SCRIPT ===")
     print(f"Existing Shards   : {start_shard} shards ({start_shard * shard_size_tokens / 1e9:.2f} Billion tokens already on disk)")
-    print(f"Resuming at Shard : fineweb_shard_{start_shard:04d}.bin")
+    print(f"Resuming at Shard : fineweb_edu_shard_{start_shard:04d}.bin")
     print(f"Target Shard Size : {shard_size_tokens:,} tokens (~200 MB per shard)")
     
     print("\nLoading modern compact SmolLM BPE Tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
     print(f"Vocabulary Size     : {tokenizer.vocab_size:,} tokens")
     
-    print("\nStreaming FineWeb (sample-10BT)...")
-    raw_dataset = load_dataset("HuggingFaceFW/fineweb", name="sample-10BT", split="train", streaming=True)
+    print("\nStreaming FineWeb-Edu (sample-10BT)...")
+    raw_dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
     iterator = iter(raw_dataset)
     
     # Fast-forward iterator over documents matching existing shards
@@ -72,10 +72,10 @@ def main(shard_size_tokens=100_000_000, max_shards=100):
             shard_tokens = np.array(current_tokens[:shard_size_tokens], dtype=np.uint16)
             current_tokens = current_tokens[shard_size_tokens:]
             
-            shard_filename = os.path.join(output_dir, f"fineweb_shard_{shard_index:04d}.bin")
+            shard_filename = os.path.join(output_dir, f"fineweb_edu_shard_{shard_index:04d}.bin")
             shard_tokens.tofile(shard_filename)
             
-            meta_filename = os.path.join(output_dir, f"fineweb_shard_{shard_index:04d}_meta.json")
+            meta_filename = os.path.join(output_dir, f"fineweb_edu_shard_{shard_index:04d}_meta.json")
             with open(meta_filename, "w") as f:
                 json.dump({
                     "shard_index": shard_index,

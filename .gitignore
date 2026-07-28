@@ -2,16 +2,20 @@
 *.bin
 shards/
 fineweb_tokens.bin
-
+shards_edu/
+wandb/
 # Model Weights Checkpoints
 *.pth
 *.pt
 *.safetensors
 accelerate_checkpoint/
 
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
 # Logs & Cache
 __pycache__/
-.ipynb_checkpoints/
 *.log
 evaluation_results*.json
 eval_results.json
