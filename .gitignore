@@ -9,6 +9,8 @@ wandb/
 *.pt
 *.safetensors
 accelerate_checkpoint/
+*.tar.gz
+*.tar
 
 # Notebooks
 *.ipynb

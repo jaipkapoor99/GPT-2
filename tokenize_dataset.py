@@ -28,10 +28,17 @@ def main(shard_size_tokens=100_000_000, max_shards=100):
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
     print(f"Vocabulary Size     : {tokenizer.vocab_size:,} tokens")
     
+    import time
     print("\nStreaming FineWeb-Edu (sample-10BT)...")
-    raw_dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
-    iterator = iter(raw_dataset)
-    
+    for attempt in range(1, 6):
+        try:
+            raw_dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
+            iterator = iter(raw_dataset)
+            break
+        except Exception as e:
+            print(f"⚠ HF load_dataset attempt {attempt}/5 failed: {e}. Retrying in 5s...")
+            time.sleep(5)
+            
     # Fast-forward iterator over documents matching existing shards
     tokens_to_skip = start_shard * shard_size_tokens
     if tokens_to_skip > 0:
@@ -40,12 +47,15 @@ def main(shard_size_tokens=100_000_000, max_shards=100):
         pbar_skip = tqdm(total=tokens_to_skip, desc="Fast-forwarding stream", unit="tok", unit_scale=True)
         while skipped < tokens_to_skip:
             try:
-                doc_text = next(iterator)['text']
+                doc = next(iterator)
+                doc_text = doc['text']
                 doc_toks = len(tokenizer.encode(doc_text, verbose=False))
                 skipped += doc_toks
                 pbar_skip.update(doc_toks)
             except StopIteration:
                 break
+            except Exception as e:
+                time.sleep(1)
         pbar_skip.close()
 
     current_tokens = []
