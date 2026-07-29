@@ -1,6 +1,6 @@
-# GPT-2 (124M 2026 SOTA) Pre-training Pipeline
+# Ultron (124M 2026 SOTA) Pre-training Pipeline
 
-A high-performance, modern PyTorch implementation of **GPT-2 (124M parameters)** pre-trained from scratch on the **FineWeb-Edu** dataset, incorporating 2026 State-of-the-Art (SOTA) LLM training innovations.
+A high-performance, modern PyTorch implementation of **Ultron (124M parameters)** pre-trained from scratch on the **FineWeb-Edu** dataset, incorporating 2026 State-of-the-Art (SOTA) LLM training innovations.
 
 Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newton-Schulz Matrix Optimizer**, **Grouped-Query Attention (GQA)**, **SwiGLU FFN Activations**, **Logit Soft-Capping**, **100% Bias-Free Linear Layers**, **WSD (Warmup-Stable-Decay) Schedule**, **Zero-Copy Memory-Mapped Data Pipeline**, and **PyTorch 2.0 Graph Compilation**.
 
@@ -47,8 +47,8 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 ## 📂 Repository Structure
 
 ```text
-GPT-2/
-├── model.py              # PyTorch GPT-2 (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
+Ultron/
+├── model.py              # PyTorch Ultron (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
 ├── config.py             # Model & Hyperparameter Configuration Dataclass
 ├── dataset.py            # Zero-Copy Memmap Sharded Dataset Loader
 ├── train.py              # Main Distributed Accelerated Training Script
