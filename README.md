@@ -1,22 +1,25 @@
 # GPT-2 (124M 2026 SOTA) Pre-training Pipeline
 
-A high-performance, modern PyTorch implementation of **GPT-2 (124M parameters)** pre-trained from scratch on the **Hugging Face FineWeb** dataset (`sample-10BT`), incorporating 2026 State-of-the-Art (SOTA) LLM training innovations.
+A high-performance, modern PyTorch implementation of **GPT-2 (124M parameters)** pre-trained from scratch on the **FineWeb-Edu** dataset, incorporating 2026 State-of-the-Art (SOTA) LLM training innovations.
 
-Features **Rotary Position Embeddings (RoPE)**, **Muon Newton-Schulz Matrix Optimizer**, **Grouped-Query Attention (GQA)**, **SwiGLU FFN Activations**, **RMSNorm**, **100% Bias-Free Linear Layers**, **WSD (Warmup-Stable-Decay) Schedule**, **Zero-Copy Memory-Mapped Data Pipeline**, **FlashAttention-2 Integration**, **PyTorch 2.0 Graph Compilation**, and **Hugging Face Accelerate & Safetensors Integration**.
+Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newton-Schulz Matrix Optimizer**, **Grouped-Query Attention (GQA)**, **SwiGLU FFN Activations**, **Logit Soft-Capping**, **100% Bias-Free Linear Layers**, **WSD (Warmup-Stable-Decay) Schedule**, **Zero-Copy Memory-Mapped Data Pipeline**, and **PyTorch 2.0 Graph Compilation**.
 
 ---
 
-## 🌟 Key Features & Architectural Enhancements
+## 🌟 Key Features & Architectural Baseline
 
-- **Rotary Position Embeddings (RoPE):** Replaced static positional embeddings with RoPE (LLaMA 3 / Qwen 2.5 standard) applied to $Q$ and $K$ heads, enabling zero-shot context window extension.
+- **Rotary Position Embeddings (RoPE):** RoPE (LLaMA 3 / Qwen 2.5 standard) applied to $Q$ and $K$ heads, enabling zero-shot context window extension.
+- **QK-Head RMSNorm:** Query/key RMSNorm (Qwen 2.5 / Gemma 2 standard) for loss stability during pre-training.
 - **Muon Newton-Schulz Matrix Optimizer:** Pre-training optimization using Keller Jordan's **Muon** (Momentum Orthogonalized by 5th-order Newton-Schulz iterations) for 2D body weights, paired with fused `AdamW` for 1D vectors/embeddings.
 - **Grouped-Query Attention (GQA):** 12 Query heads and 4 Key/Value heads (3:1 Query-to-KV ratio), reducing KV-cache memory usage during autoregressive generation by **3x**.
-- **Modernized SwiGLU FFN:** Replaced legacy GELU MLP with **SwiGLU Gated Linear Units** aligned to multiples of 64 for optimal GPU Tensor Core throughput.
-- **RMSNorm & Bias-Free Layers:** Standardized on Root Mean Square Layer Normalization (RMSNorm) and removed linear projection bias parameters across all layers (`bias=False`).
-- **Warmup-Stable-Decay (WSD) Schedule:** Replaced traditional cosine decay with WSD (80% stable phase, 20% cosine decay), allowing optimal checkpoint decay tuning.
-- **Activation Checkpointing:** Optional gradient checkpointing (`--gradient-checkpointing`) reducing GPU VRAM memory consumption by **~60%**.
+- **SwiGLU FFN:** SwiGLU Gated Linear Units aligned to multiples of 64 for optimal GPU Tensor Core throughput.
+- **Logit Soft-Capping:** Gemma 2 standard logit soft-capping (`cap=15.0`) applied via `tanh` to prevent overconfidence.
+- **RMSNorm & Bias-Free Layers:** Root Mean Square Layer Normalization (RMSNorm) and bias-free linear projections across all layers (`bias=False`).
+- **Warmup-Stable-Decay (WSD) Schedule:** WSD learning rate schedule (80% stable phase, 20% cosine decay).
 - **Zero-Copy Data Loader:** Memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead during multi-billion token streaming.
-- **Safetensors & Hugging Face Hub Integration:** Native export to `model.safetensors` format hosted live on Hugging Face Hub ([`jaipkapoor99/gpt2-2026-sota`](https://huggingface.co/jaipkapoor99/gpt2-2026-sota)).
+
+> [!NOTE]
+> **Hugging Face Component (TODO):** Hugging Face Hub uploads, pipeline wrappers, and remote model publishing are intentionally deferred as future **TODO** items. Current focus is strictly local-first pre-training and benchmarking.
 
 ---
 
@@ -26,50 +29,36 @@ Features **Rotary Position Embeddings (RoPE)**, **Muon Newton-Schulz Matrix Opti
 | :--- | :--- | :--- |
 | **Model Parameters** | 114,053,376 (114M) | GQA + Bias-Free SOTA 124M scale |
 | **Layers / Query Heads / KV Heads** | 12 layers / 12 Q-heads / 4 KV-heads | GQA Transformer layout ($C=768, n_{head}=12, n_{kv\_head}=4$) |
-| **Positional Embedding** | RoPE (Rotary) | Dynamic frequency base ($10,000$) |
+| **Positional Embedding** | RoPE (Rotary) | Dynamic frequency base ($10,000$); learned absolute `wpe` embeddings present but superseded by RoPE |
+| **QK Normalization** | RMSNorm | Query/Key head normalization |
+| **Logit Soft-Cap** | 15.0 | Gemma 2 style `tanh` soft-capping |
 | **FFN Activation** | SwiGLU | Multiples of 64 Tensor-Core aligned |
 | **Normalization** | RMSNorm | $\epsilon=10^{-5}$ |
 | **Context Window ($T$)** | 1,024 tokens | Extendable sequence length |
 | **Micro-Batch Size ($B$)** | 16 | Per-GPU micro-batch size |
 | **Gradient Accumulation** | 4 steps | Effective batch size = 64 sequences (65,536 tokens/step) |
-| **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer (`HuggingFaceTB/SmolLM-135M`) |
+| **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer |
 | **Precision** | BFloat16 (`bf16`) | Native mixed precision |
 | **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
 | **Optimizer** | Muon + AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
 
 ---
 
-## 🏆 Zero-Shot Benchmark & Live Training Metrics
+## 📂 Repository Structure
 
-Evaluated directly from live training checkpoint state (`Step 105,335` / **6.90 Billion Tokens**):
-
-| Metric / Benchmark | Target / OpenAI Baseline | **Our 2026 SOTA GPT-2 (Step 105,335 - 69% Complete)** | Status / Notes |
-| :--- | :--- | :--- | :--- |
-| **Tokens Processed** | 10.00 Billion Tokens | **6.90 Billion Tokens** | 🔄 *Pre-training Live (69% Complete)* |
-| **Validation Loss** | 3.5300 (GPT-2 Baseline) | **3.0499** 🏆 | 🚀 **New Record-Low Validation Loss** |
-| **Validation Perplexity** | 34.12 (GPT-2 Baseline) | **21.11** | ⚡ **-13.01 Perplexity Improvement** |
-| **Training Speed** | ~1.5 it/s | **2.79 it/s** | ⚡ **NVIDIA RTX 5090 (599.8W / 100% TDP)** |
-| **ARC-Easy (Science QA)** | 25.00% | **25.42%** | 🚀 **Outperforms OpenAI Baseline** |
-
----
-
-## 📁 Clean Repository Structure
-
-```
+```txt
 GPT-2/
-├── model.py              # PyTorch GPT-2 (RoPE + GQA + SwiGLU + RMSNorm)
+├── model.py              # PyTorch GPT-2 (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
 ├── config.py             # Model & Hyperparameter Configuration Dataclass
 ├── dataset.py            # Zero-Copy Memmap Sharded Dataset Loader
 ├── train.py              # Main Distributed Accelerated Training Script
 ├── trainer.py            # Trainer Class with Keller Jordan Muon + AdamW
-├── watch_training.py     # Live ASCII Box Vitals & Loss Dashboard
-├── auto_runner.py        # Crash-Proof Auto-Restart Training Supervisor Daemon
-├── MODEL_CARD.md         # Detailed Hugging Face Model Card Documentation
+├── requirements.txt      # Dependencies
 ├── README.md             # Project Overview & Architecture Guide
-├── scripts/              # Helper Scripts (sample.py, tokenize_dataset.py, benchmark.py, etc.)
-├── archives/             # Compressed Shard & Model Checkpoint Backups
-├── logs/                 # Run Execution & Evaluation Output Logs
-└── ephemeral/            # Untracked Scratchpad & Benchmark Workspace
+├── tests/                # Unit & Integration Tests (Accelerate + torch.testing)
+│   └── test_model.py
+└── scripts/              # Helper Scripts
+    └── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
 ```
 
 ---
@@ -84,205 +73,97 @@ cd GPT-2.0
 pip install -r requirements.txt
 ```
 
-### 2. Auto-Restarting Pre-training Run (Supervisor Daemon)
+### 2. Tokenize Dataset
 
-To start pre-training with automatic crash-recovery and continuous state resumption:
-
-```bash
-python3 auto_runner.py
-```
-
-### 3. Live Monitoring
-
-To monitor training progress, loss curves, CPU (Ryzen 7 9800X3D), and GPU (RTX 5090) vitals in real time:
+Tokenize the FineWeb-Edu dataset into compact binary shards:
 
 ```bash
-watch -n 1 python3 watch_training.py
+python3 scripts/tokenize_dataset.py
 ```
 
-### 4. Interactive Text Generation
+### 3. Environment & Accelerate Configuration
 
-Generate text using the latest checkpoint with anti-repetition penalty (1.15) and nucleus sampling:
+Optionally configure Hugging Face Accelerate for your machine setup (`bf16` precision & `inductor` TorchDynamo backend):
 
 ```bash
-python3 scripts/sample.py --prompt "The secret to building scalable artificial intelligence systems is"
+accelerate config
 ```
 
-### 5. Zero-Shot Benchmarking (`lm-evaluation-harness`)
+### 4. Pre-training Run
 
-Evaluate benchmarks (HellaSwag, ARC-Easy) directly:
+Start pre-training (defaults to `--mode=continue` to seamlessly resume existing checkpoints):
 
 ```bash
-python3 scripts/benchmark.py --tasks hellaswag,arc_easy
+accelerate launch train.py
 ```
 
-### 6. Upload Checkpoint to Hugging Face Hub
-
-To push model weights (`model.safetensors`), configurations, and documentation directly to Hugging Face:
+To explicitly specify training mode (`--mode=continue`, `--mode=fresh`, or `--mode=test`):
 
 ```bash
-python3 scripts/upload_to_hf.py
+# Resume from existing checkpoint
+accelerate launch train.py --mode=continue
+
+# Start a fresh run from step 0
+accelerate launch train.py --mode=fresh
+
+# Run for a specific step count (e.g. 500 steps)
+accelerate launch train.py --mode=continue --max-steps=500
+
+# Run a quick 100-step test mode
+accelerate launch train.py --mode=test
 ```
 
+#### ⚡ Performance & Throughput Benchmarks
 
----
+- **Step Throughput**: `~2.80 iterations/sec` (2.79–2.82 it/s)
+- **Token Throughput**: `~183,000+ tokens/sec` (65,536 tokens / step)
+- **Full Pre-training Time (10B Tokens / 152.5k steps)**: **~15 hours total** on an RTX 5090 GPU!
 
-## 📝 Text Generation Examples
+#### 🖥️ Training Progress Display
 
-Generated directly by **Our 2026 SOTA GPT-2 (124M)** using nucleus sampling (`top_k=50`, `top_p=0.9`, `temperature=0.8`, `repetition_penalty=1.15`):
+During training a single-line progress counter is printed to the terminal and continuously overwritten (no clutter):
 
-### 1. 🤖 Technology & Artificial Intelligence
->
-> **Prompt:** `The future of artificial intelligence is`
->
-> **Generated:** *...going to be even bigger than that. And there are a lot of things that we can do with AI, but the real challenge for us is not in the ability to predict how things will behave from different points of view, but rather how they’ll behave from different point of view.” In this article, Wired’s Jeff Williams shares his thoughts on how humans can use Artificial Intelligence (AI) and Machine Learning (ML) to make smarter decisions about human behavior.*
-
-### 2. 🌌 Astronomy & Astrophysics
->
-> **Prompt:** `Beyond the outer edges of the solar system,`
->
-> **Generated:** *...and which are often used for solar radiation. The outer surfaces of stars can vary greatly in their color. This is because there are no known signs of a darkening or dimming of star formation, and neither does the outer surface of a star. However, when one looks at some of the visible objects that appear on our solar system, such as stars or planets, we can see visible changes in the size of these objects.*
-
-### 3. 📜 History & Human Civilization
->
-> **Prompt:** `The journey of human civilization has always been`
->
-> **Generated:** *...a long one. It is not without its flaws and limitations, but the end result is a remarkable story that we can’t help but cherish. A tale that many might think of as a ‘new world’ – or a ‘life’. But what makes it so special is its complexity. This book represents an extraordinary journey. We are given a wonderful and unexpected insight into this ancient world...*
-
-### 4. 🌿 Nature & Hospitality
->
-> **Prompt:** `Deep in the heart of the ancient forest,`
->
-> **Generated:** *...this unique home will offer you a perfect retreat for relaxation. The fully equipped kitchen, spacious terrace and large open plan living area is ideal for entertaining guests or a relaxing break from it all. The newly built guest accommodation offers everything you need: Fully furnished studio or 3 bedroom apartment...*
-
----
-
-## 📂 Project Structure
-
-```text
-├── config.py             # Hyperparameters & GPT2Config dataclass
-├── dataset.py            # Zero-Copy Memmap Sharded DataLoader
-├── model.py              # GPT-2 Architecture (FlashAttention-2, SwiGLU FFN, Weight Tying)
-├── train.py              # Distributed Pre-training Loop (Accelerate, bf16, torch.compile)
-├── sample.py             # Autoregressive Generation CLI with Anti-Repetition Safeguards
-├── test_hf_generate.py   # Hugging Face Transformers + Safetensors Generation CLI
-├── upload_to_hf.py       # Automated Hugging Face Model Hub Uploader
-├── tokenize_dataset.py   # FineWeb dataset tokenization into binary shards
-├── muon.py               # Muon (Newton-Schulz Orthogonalized) Optimizer implementation
-├── loss_curve.svg        # Pre-training loss curve vector visualization
-├── loss_history.csv      # Step-by-step training and dev loss logs
-├── requirements.txt      # Dependencies
-└── README.md             # Project documentation
+```
+[12%] ETA: 2h 45m 30s | Step: 18312/152587
 ```
 
----
+- **Percentage** — rounded integer progress over the full run.
+- **ETA** — time remaining (`h m s`), computed from the throughput of the **current session only**, so it stays accurate after a resumed checkpoint.
+- **Step counter** — `current / total` steps.
 
-## 📦 Quickstart: Text Generation
+#### 💾 Checkpointing
 
-> [!NOTE]  
-> **Generation Method Status:** Local generation via `sample.py` is the primary, fully verified generation pipeline. The Hugging Face `transformers` integration (`AutoModelForCausalLM` / `test_hf_generate.py`) is currently **in active development**.
-
-### Option A: Local Generation CLI (Recommended)
-
-Generate text with anti-repetition penalty (1.15), Top-k (50) & Top-p (0.9) nucleus sampling, and temperature control using local model weights:
+Training state is saved as an **Accelerate checkpoint** (`accelerate_checkpoint/`) which includes model weights, optimizer state, scheduler, and RNG seeds. Resume is seamless:
 
 ```bash
-python sample.py --prompt "The future of artificial intelligence is" --repetition-penalty 1.15 --temperature 0.8
+accelerate launch train.py --mode=continue
 ```
 
-### Option B: Hugging Face `transformers` Pipeline (In Active Development)
+> [!NOTE]
+> Test runs (`--mode=test`) never write checkpoints, keeping production resume states unpolluted.
 
-```python
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+#### 📈 Experiment Tracking (W&B)
 
-model_id = "jaipkapoor99/gpt2-2026-sota"
+All runs are tracked with **Weights & Biases** under the `gpt2-pretraining` project. The following metrics are logged at every step:
 
-# Load model and tokenizer
-model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True).to("cuda")
-tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+| Metric | Description |
+| :--- | :--- |
+| `train_loss` | Training cross-entropy loss (every step) |
+| `dev_loss` | Validation cross-entropy loss (every `eval_interval` steps, co-plotted with `train_loss`) |
+| `lr` | Current learning rate |
+| `eta_seconds` | Estimated time remaining (seconds), session-scoped |
+| `progress_percent` | Integer percentage of total run |
 
-prompt = "The future of artificial intelligence is"
-inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+- `dev_loss` and `train_loss` are logged at the **same step** at eval intervals so they appear on a **single shared chart** in W&B.
+- `dev_loss` is registered as a **summary metric (min)**, so the best validation loss is always visible on the run card.
 
-with torch.no_grad():
-    outputs = model.generate(**inputs, max_new_tokens=60, do_sample=True, temperature=0.7, top_k=50, use_cache=False)
+### 5. Running Unit Tests
 
-print(tokenizer.decode(outputs[0], skip_special_tokens=True))
-```
-
----
-
-## 🏃 Running Pre-training Locally
-
-### 1. Install Dependencies
+Run the test suite powered by `Accelerate` and `torch.testing`:
 
 ```bash
-pip install -r requirements.txt
+python3 -m unittest discover tests
 ```
-
-### 2. Tokenize FineWeb Dataset
-
-Tokenize the FineWeb dataset into compact 100M-token binary shards (`uint16` format):
-
-```bash
-python tokenize_dataset.py
-```
-
-### 3. Launch Distributed Pre-training
-
-Start pre-training with PyTorch 2.0 compile and Hugging Face Accelerate:
-
-```bash
-accelerate launch train.py --max-steps 10000
-```
-
-### 4. Resume Pre-training with Accelerate
-
-Resume full multi-GPU training state (model weights, optimizer state, LR schedule, and RNG state) seamlessly using Accelerate:
-
-```bash
-accelerate launch train.py --resume --max-steps 20000
-```
-
-Or specify a custom Accelerate checkpoint directory / PyTorch weights file:
-
-```bash
-accelerate launch train.py --load-checkpoint accelerate_checkpoint --max-steps 20000
-```
-
-### 5. Standard Zero-Shot Benchmarking (`lm-evaluation-harness`)
-
-Evaluate HellaSwag, ARC-Easy, LAMBADA, and MMLU directly using our built-in benchmark script (which wraps `lm-evaluation-harness`):
-
-```bash
-# Evaluate published Hugging Face Hub repository
-python benchmark.py --tasks hellaswag,arc_easy
-```
-
-### 6. Interactive Text Generation with Anti-Repetition Safeguards
-
-Generate text with anti-repetition penalty (1.15), Top-k (50) & Top-p (0.9) nucleus sampling, and temperature control:
-
-```bash
-python sample.py --prompt "The future of artificial intelligence is" --repetition-penalty 1.15 --temperature 0.8
-```
-
-### 7. Upload Checkpoint to Hugging Face Hub
-
-To push your model weights (`model.safetensors`), configurations, and documentation directly to Hugging Face:
-
-```bash
-python upload_to_hf.py
-```
-
----
-
-## 📈 Visualizing Training Loss
-
-Training logs are saved in real-time to `loss_history.json` and `loss_history.csv`. Pre-training loss trajectory plot is available in both vector [`loss_curve.svg`](file:///home/jaipkapoor99/Kaggle/Andrej%20Karpathy%20Course/GPT-2/loss_curve.svg) and high-res [`loss_curve.png`](file:///home/jaipkapoor99/Kaggle/Andrej%20Karpathy%20Course/GPT-2/loss_curve.png).
-
-![Pre-Training Loss Curve](loss_curve.png)
 
 ---
 
@@ -290,7 +171,6 @@ Training logs are saved in real-time to `loss_history.json` and `loss_history.cs
 
 - Andrej Karpathy for the inspiring [*Neural Networks: Zero to Hero*](https://github.com/karpathy/build-nanogpt) course and `nanoGPT` project.
 - Keller Jordan et al. for pioneering the [Muon](https://github.com/KellerJordan/Muon) optimizer and algorithmic speedrun innovations.
-- Hugging Face for the [FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb) dataset and `transformers` ecosystem.
 
 ---
 
@@ -300,10 +180,166 @@ If you use the Muon optimizer or this codebase, please cite the original Muon wo
 
 ```bibtex
 @misc{jordan2024muon,
-  author       = {Keller Jordan and Yuchen Jin and Vlado Boza and You Jiacheng and
-                  Franz Cesista and Laker Newhouse and Jeremy Bernstein},
-  title        = {Muon: An optimizer for hidden layers in neural networks},
-  year         = {2024},
-  url          = {https://kellerjordan.github.io/posts/muon/}
+  author = {Jordan, Keller and Jin, Yuchen and Boza, Vlado and You, Jiacheng and Cesista, Franz and Newhouse, Laker and Bernstein, Jeremy},
+  title  = {Muon: An optimizer for hidden layers in neural networks},
+  year   = {2024},
+  url    = {https://kellerjordan.github.io/posts/muon/}
+}
+```
+
+
+---
+
+## 🌟 Key Features & Architectural Baseline
+
+- **Rotary Position Embeddings (RoPE):** RoPE (LLaMA 3 / Qwen 2.5 standard) applied to $Q$ and $K$ heads, enabling zero-shot context window extension.
+- **QK-Head RMSNorm:** Query/key RMSNorm (Qwen 2.5 / Gemma 2 standard) for loss stability during pre-training.
+- **Muon Newton-Schulz Matrix Optimizer:** Pre-training optimization using Keller Jordan's **Muon** (Momentum Orthogonalized by 5th-order Newton-Schulz iterations) for 2D body weights, paired with fused `AdamW` for 1D vectors/embeddings.
+- **Grouped-Query Attention (GQA):** 12 Query heads and 4 Key/Value heads (3:1 Query-to-KV ratio), reducing KV-cache memory usage during autoregressive generation by **3x**.
+- **SwiGLU FFN:** SwiGLU Gated Linear Units aligned to multiples of 64 for optimal GPU Tensor Core throughput.
+- **RMSNorm & Bias-Free Layers:** Root Mean Square Layer Normalization (RMSNorm) and bias-free linear projections across all layers (`bias=False`).
+- **Warmup-Stable-Decay (WSD) Schedule:** WSD learning rate schedule (80% stable phase, 20% cosine decay).
+- **Zero-Copy Data Loader:** Memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead during multi-billion token streaming.
+
+> [!NOTE]  
+> **Hugging Face Component (TODO):** Hugging Face Hub uploads, pipeline wrappers, and remote model publishing are intentionally deferred as future **TODO** items. Current focus is strictly local-first pre-training and benchmarking.
+
+---
+
+## 📊 Pre-training Architecture & Hyperparameters
+
+| Parameter | Value | Description |
+| :--- | :--- | :--- |
+| **Model Parameters** | 114,053,376 (114M) | GQA + Bias-Free SOTA 124M scale |
+| **Layers / Query Heads / KV Heads** | 12 layers / 12 Q-heads / 4 KV-heads | GQA Transformer layout ($C=768, n_{head}=12, n_{kv\_head}=4$) |
+| **Positional Embedding** | RoPE (Rotary) | Dynamic frequency base ($10,000$) |
+| **QK Normalization** | RMSNorm | Query/Key head normalization |
+| **FFN Activation** | SwiGLU | Multiples of 64 Tensor-Core aligned |
+| **Normalization** | RMSNorm | $\epsilon=10^{-5}$ |
+| **Context Window ($T$)** | 1,024 tokens | Extendable sequence length |
+| **Micro-Batch Size ($B$)** | 16 | Per-GPU micro-batch size |
+| **Gradient Accumulation** | 4 steps | Effective batch size = 64 sequences (65,536 tokens/step) |
+| **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer |
+| **Precision** | BFloat16 (`bf16`) | Native mixed precision |
+| **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
+| **Optimizer** | Muon + AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
+
+---
+
+## 📂 Repository Structure
+
+```txt
+GPT-2/
+├── model.py              # PyTorch GPT-2 (RoPE + GQA + SwiGLU + RMSNorm + QKNorm)
+├── config.py             # Model & Hyperparameter Configuration Dataclass
+├── dataset.py            # Zero-Copy Memmap Sharded Dataset Loader
+├── train.py              # Main Distributed Accelerated Training Script
+├── trainer.py            # Trainer Class with Keller Jordan Muon + AdamW
+├── requirements.txt      # Dependencies
+├── README.md             # Project Overview & Architecture Guide
+├── tests/                # Unit & Integration Tests (Accelerate + torch.testing)
+│   └── test_model.py
+├── scripts/              # Helper Scripts
+│   └── tokenize_dataset.py # FineWeb dataset tokenization into binary shards
+└── logs/                 # Run Execution & Evaluation Output Logs
+```
+
+---
+
+## 🚀 Quickstart & Workflow Guide
+
+### 1. Installation
+
+```bash
+git clone https://github.com/jaipkapoor99/GPT-2.0.git
+cd GPT-2.0
+pip install -r requirements.txt
+```
+
+### 2. Tokenize Dataset
+
+Tokenize the FineWeb dataset into compact binary shards:
+
+```bash
+python3 scripts/tokenize_dataset.py
+```
+
+### 3. Environment & Accelerate Configuration
+
+Optionally configure Hugging Face Accelerate for your machine setup (`bf16` precision & `inductor` TorchDynamo backend):
+
+```bash
+accelerate config
+```
+
+### 4. Pre-training Run
+
+Start pre-training (defaults to `--mode=continue` to seamlessly resume existing checkpoints):
+
+```bash
+accelerate launch train.py
+```
+
+To explicitly specify training mode (`--mode=continue`, `--mode=fresh`, or `--mode=test`):
+
+```bash
+# Resume from existing checkpoint
+accelerate launch train.py --mode=continue
+
+# Start a fresh run from step 0
+accelerate launch train.py --mode=fresh
+
+# Run for a specific step count (e.g. 500 steps)
+accelerate launch train.py --mode=continue --max-steps=500
+
+# Run a quick 100-step test mode
+accelerate launch train.py --mode=test
+```
+
+#### ⚡ Performance & Throughput Benchmarks
+
+- **Step Throughput**: `~2.80 iterations/sec` (2.79–2.82 it/s)
+- **Token Throughput**: `~183,000+ tokens/sec` (65,536 tokens / step)
+- **Full Pre-training Time (10B Tokens / 152.5k steps)**: **~15 hours total** on an RTX 5090 GPU!
+
+#### 🖥️ Training Progress Display
+
+During training a single-line progress counter is printed to the terminal and continuously overwritten (no clutter):
+
+```
+[12%] ETA: 2h 45m 30s | Step: 18312/152587
+```
+
+- **Percentage** — rounded integer progress over the full run.
+- **ETA** — time remaining (`h m s`), computed from the throughput of the **current session only**, so it stays accurate after a resumed checkpoint.
+- **Step counter** — `current / total` steps.
+
+### 5. Running Unit Tests
+
+Run the test suite powered by `Accelerate` and `torch.testing`:
+
+```bash
+python3 -m unittest discover tests
+```
+
+---
+
+## 📜 Acknowledgments
+
+- Andrej Karpathy for the inspiring [*Neural Networks: Zero to Hero*](https://github.com/karpathy/build-nanogpt) course and `nanoGPT` project.
+- Keller Jordan et al. for pioneering the [Muon](https://github.com/KellerJordan/Muon) optimizer and algorithmic speedrun innovations.
+
+---
+
+## 📚 Citation
+
+If you use the Muon optimizer or this codebase, please cite the original Muon work:
+
+```bibtex
+@misc{jordan2024muon,
+  author = {Jordan, Keller and Jin, Yuchen and Boza, Vlado and You, Jiacheng and Cesista, Franz and Newhouse, Laker and Bernstein, Jeremy},
+  title  = {Muon: An optimizer for hidden layers in neural networks},
+  year   = {2024},
+  url    = {https://kellerjordan.github.io/posts/muon/}
 }
 ```
