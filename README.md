@@ -68,8 +68,8 @@ GPT-2/
 ### 1. Installation
 
 ```bash
-git clone https://github.com/jaipkapoor99/GPT-2.0.git
-cd GPT-2.0
+git clone https://github.com/jaipkapoor99/ultron.git
+cd ultron
 pip install -r requirements.txt
 ```
 
@@ -81,12 +81,32 @@ Tokenize the FineWeb-Edu dataset into compact binary shards:
 python3 scripts/tokenize_dataset.py
 ```
 
-### 3. Environment & Accelerate Configuration
+### 3. Configure Accelerate ⚠️ Required
 
-Optionally configure Hugging Face Accelerate for your machine setup (`bf16` precision & `inductor` TorchDynamo backend):
+> [!IMPORTANT]
+> **`accelerate config` is a cornerstone of this repository.** Every script — `train.py`, `generate.py`, and `tests/test_model.py` — is launched exclusively via `accelerate launch` and will raise a `RuntimeError` if invoked with plain `python3`. The config file (`~/.cache/huggingface/accelerate/default_config.yaml`) is the single source of truth for device, precision, and compiler settings.
+
+Run this **once** to generate the config for your machine:
 
 ```bash
 accelerate config
+```
+
+**Recommended settings for this project:**
+
+| Setting | Value | Why |
+| :--- | :--- | :--- |
+| Compute environment | Local machine | Single-node training |
+| Distributed type | No | Single GPU |
+| Mixed precision | `bf16` | Required for SOTA throughput on RTX 30xx/40xx/50xx |
+| TorchDynamo backend | `inductor` | Enables `torch.compile` graph compilation |
+
+Once configured, **all three entry points** use this config automatically:
+
+```bash
+accelerate launch train.py           # pre-training
+accelerate launch generate.py        # text generation
+accelerate launch -m unittest tests.test_model  # unit tests
 ```
 
 ### 4. Pre-training Run
@@ -162,7 +182,7 @@ All runs are tracked with **Weights & Biases** under the `gpt2-pretraining` proj
 Run the test suite powered by `Accelerate` and `torch.testing`:
 
 ```bash
-python3 -m unittest discover tests
+accelerate launch -m unittest tests.test_model
 ```
 
 ---
