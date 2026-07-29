@@ -167,6 +167,41 @@ python3 -m unittest discover tests
 
 ---
 
+## 🧪 Sample Generations (Step 10,750 / 152,587 — ~7% trained)
+
+These samples were produced by `generate.py` at early training (≈7% through the full 10B-token run), temperature 0.85, top-k 50.
+
+---
+
+**Prompt:** *"The history of science shows that"*
+
+> The history of science shows that it has been used successfully in several different fields, including the fields of Physics, Physics of Matter, Astronomy, and Cosmology. During the centuries since the beginning of the era, science has served to educate individuals about the world around them and to inform them about the complexities of their world. A great example of this type of knowledge is that scientists and mathematicians have been working to understand the cosmos in a vast, diverse way. Their understanding of the cosmos has helped shape the way they understand the world and how to understand it. However, this kind of knowledge has also contributed to the growth of the…
+
+---
+
+**Prompt:** *"The best way to learn programming is"*
+
+> The best way to learn programming is through programming in the C .c and c programming languages. C .c programming languages have been developed for use with programming and can be used for programming a large number of languages, including C .c, C .etc. Most programming languages are designed for programming in C .c. The reason why you should learn C.c is to avoid any of the many problems that lie behind it. Python programming language is a great programming language and a good starting point in the C programming language. When…
+
+---
+
+**Prompt:** *"In the depths of the ocean"*
+
+> In the depths of the ocean, he can now see that the ocean is the most diverse, with a lot of rocks and rocks. He can also see that the continents were more than a single continent, but they were made of different areas, which made up less than one percent of the Earth's mass. The last three centuries were the warmest years ever recorded on the planet. To me, this meant that the 19th century was the hottest year ever recorded on Earth. With the first ice age, more and more we live on the planet…
+
+---
+
+**Prompt:** *"Once upon a time in a kingdom far away"*
+
+> Once upon a time in a kingdom far away from the centre, once upon a time in every thousand years, when God created every part of the earth, and only the one through the whole human race of heaven and earth, and all the parts of Christ, and all that was in Him, that all the earth, which had been given to them, could be made to one another, and that all things God made to Him made one another…
+
+---
+
+> [!NOTE]
+> Quality improves substantially as training continues toward 152,587 steps (~10B tokens). These samples are a snapshot at early training to demonstrate the generation pipeline is working end-to-end.
+
+---
+
 ## 📜 Acknowledgments
 
 - Andrej Karpathy for the inspiring [*Neural Networks: Zero to Hero*](https://github.com/karpathy/build-nanogpt) course and `nanoGPT` project.
