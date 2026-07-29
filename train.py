@@ -21,7 +21,10 @@ from tqdm import tqdm
 from config import GPT2Config
 from model import GPT2
 from dataset import get_dataloaders
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from muon import Muon
+
 
 def print_parameter_breakdown(model: GPT2, accelerator: Accelerator):
     unwrapped = accelerator.unwrap_model(model)

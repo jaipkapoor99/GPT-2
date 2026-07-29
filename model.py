@@ -116,12 +116,12 @@ class CausalSelfAttention(nn.Module):
             
         dropout_p = self.dropout_p if self.training else 0.0
         
-        # Enforce FlashAttention during training or full-sequence passes, but fallback for decoding (T=1)
-        if self.training or q.size(2) > 1:
-            with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
-                y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=dropout_p)
-        else:
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=False, dropout_p=dropout_p)
+        # Efficient Scaled Dot-Product Attention (PyTorch automatically selects optimal FlashAttention/CuDNN kernel)
+        is_causal = self.training or q.size(2) > 1
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal, dropout_p=dropout_p)
+
+
+
         
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.c_proj(y), new_past_key_value

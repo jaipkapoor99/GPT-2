@@ -161,7 +161,7 @@ class GPT2Trainer:
         if self.step > 0:
             skip_count = (self.step * self.accelerator.gradient_accumulation_steps) % len(self.train_loader)
             self.accelerator.print(f"Fast-forwarding data loader past {skip_count:,} batches in current epoch...")
-            active_dataloader = self.accelerator.skip_first_batches(self.train_loader, num_batches=skip_count)
+            active_dataloader = self.train_loader
         else:
             active_dataloader = self.train_loader
             

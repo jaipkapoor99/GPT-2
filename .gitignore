@@ -16,10 +16,12 @@ accelerate_checkpoint/
 *.ipynb
 .ipynb_checkpoints/
 
-# Logs & Cache
-__pycache__/
-*.log
-evaluation_results*.json
-eval_results.json
+# Directories & Ephemerals
+archives/
+logs/
+ephemeral/
+auto_runner.log
+auto_runner.py
+watch_training.py
 gpt2-fineweb-124m/
-gpt2-sota-instruct/
+__pycache__/

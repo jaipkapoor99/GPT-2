@@ -60,14 +60,14 @@ class ZeroCopyShardedDataset(Dataset):
         raise IndexError(f"Index {idx} out of range for dataset size {self.total_sequences}")
 
 def get_dataloaders(config: GPT2Config, accelerator):
-    shards_dir = "shards"
-    bin_shards = sorted(glob.glob(os.path.join(shards_dir, "fineweb_shard_*.bin")))
+    bin_shards = sorted(glob.glob("shards/fineweb_shard_*.bin") + glob.glob("shards_edu/fineweb_edu_shard_*.bin"))
     
     if not bin_shards:
         if os.path.exists("fineweb_tokens.bin"):
             bin_shards = ["fineweb_tokens.bin"]
         else:
             raise FileNotFoundError("No binary dataset shards found! Run 'python tokenize_dataset.py' first.")
+
 
     accelerator.print(f"Loading {len(bin_shards)} binary shard(s) via Zero-Copy Memmap Dataset...")
     
@@ -80,9 +80,10 @@ def get_dataloaders(config: GPT2Config, accelerator):
     
     train_ds, dev_ds, test_ds = torch.utils.data.random_split(full_ds, [n_train, n_dev, n_test])
     
-    train_loader = DataLoader(train_ds, batch_size=config.B, shuffle=True, num_workers=4, pin_memory=True)
-    dev_loader   = DataLoader(dev_ds, batch_size=config.B, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader  = DataLoader(test_ds, batch_size=config.B, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=config.B, shuffle=True, num_workers=2, pin_memory=False)
+    dev_loader   = DataLoader(dev_ds, batch_size=config.B, shuffle=False, num_workers=2, pin_memory=False)
+    test_loader  = DataLoader(test_ds, batch_size=config.B, shuffle=False, num_workers=2, pin_memory=False)
+
     
     train_loader, dev_loader, test_loader = accelerator.prepare(
         train_loader, dev_loader, test_loader
