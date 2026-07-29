@@ -47,7 +47,7 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 ## 📂 Repository Structure
 
 ```text
-Ultron/
+ultron/
 ├── model.py              # PyTorch Ultron (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
 ├── config.py             # Model & Hyperparameter Configuration Dataclass
 ├── dataset.py            # Zero-Copy Memmap Sharded Dataset Loader
