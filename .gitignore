@@ -1,27 +1,30 @@
 # Tokenized binary dataset & cache files
 *.bin
 shards/
-fineweb_tokens.bin
 shards_edu/
-wandb/
-# Model Weights Checkpoints
+.agents/
+# Model Weights & Checkpoints
 *.pth
 *.pt
 *.safetensors
 accelerate_checkpoint/
+gpt2-fineweb-124m/
+gpt2-sota-instruct/
 *.tar.gz
 *.tar
+
+# Training Logs & Outputs
+logs/
+wandb/
+
+# Archives
+archives/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
 
 # Notebooks
 *.ipynb
 .ipynb_checkpoints/
-
-# Directories & Ephemerals
-archives/
-logs/
-ephemeral/
-auto_runner.log
-auto_runner.py
-watch_training.py
-gpt2-fineweb-124m/
-__pycache__/

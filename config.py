@@ -1,53 +1,39 @@
 """
 GPT-2 Configuration Module
 Contains dataclass parameters for the 2026-standard GPT-2 (124M) architecture.
-Dynamically populates vocab_size from dataset metadata (fineweb_meta.json or shards/fineweb_shard_0000_meta.json).
+All hyper-parameter fields have sensible 2026 SOTA defaults.
 """
 
-import os
-import json
 from dataclasses import dataclass, field
 from typing import Optional
 
 @dataclass
 class GPT2Config:
     B: int = 16                 # Micro-batch size per pass (65k tokens/step with grad accum 4)
+    grad_accum_steps: int = 4   # Gradient accumulation steps
     T: int = 1024               # Time / Sequence length (T)
     C: int = 768                # Channels / Embedding dimension (C)
     n_head: int = 12            # Number of self-attention query heads
     n_kv_head: int = 4          # Number of key/value heads for GQA (LLaMA 3 / Qwen 2.5 style)
     n_layer: int = 12           # Number of stacked Transformer blocks
-    dropout: float = 0.0        # 10% Dropout regularization
-    learning_rate: float = 1.2e-3 # Accelerated max learning rate for SOTA loss reduction
-    min_lr: float = 1.2e-4        # Min learning rate for WSD schedule
+    dropout: float = 0.0        # No dropout (modern pre-training standard)
+    learning_rate: float = 1.2e-3 # Learning rate
+    min_lr: float = 1.2e-4        # Minimum learning rate
     warmup_steps: int = 200     # Warmup steps
-    max_steps: int = 152587     # Total training steps for 100% FineWeb dataset (10.0 Billion tokens)
-    eval_interval: int = 250    # Evaluate dev loss every 250 steps
-    gradient_checkpointing: bool = False # Activation checkpointing for memory optimization
-    use_rope: bool = True       # Rotary Position Embeddings (LLaMA 3 / Qwen 2.5 standard)
+    max_steps: int = 152587     # Total training steps (~10B tokens at 65k tokens/step)
+    eval_interval: int = 250    # Evaluation interval
+
     rope_base: float = 10000.0  # RoPE frequency base parameter
-    use_qk_norm: bool = True    # QK Head RMSNorm (Qwen 2.5 / Gemma 2 standard for loss stability)
     logit_softcap: float = 15.0 # Gemma 2 standard logit softcapping (prevents overconfidence)
-    vocab_size: Optional[int] = None # Dynamically populated from metadata or tokenizer
+    vocab_size: int = 49152      # SmolLM BPE Vocab size
     head_dim: int = field(init=False)
 
     def __post_init__(self):
         assert self.C % self.n_head == 0, f"Embedding dimension C ({self.C}) must be divisible by n_head ({self.n_head})"
         assert self.n_head % self.n_kv_head == 0, f"n_head ({self.n_head}) must be divisible by n_kv_head ({self.n_kv_head})"
         self.head_dim = self.C // self.n_head
-        
-        # Dynamically load vocab_size from dataset metadata if not explicitly specified
-        if self.vocab_size is None:
-            meta_candidates = [
-                "fineweb_meta.json",
-                os.path.join("shards", "fineweb_shard_0000_meta.json")
-            ]
-            for meta_file in meta_candidates:
-                if os.path.exists(meta_file):
-                    with open(meta_file, "r") as f:
-                        meta = json.load(f)
-                        self.vocab_size = meta.get("vocab_size", 49152)
-                    break
-                    
-            if self.vocab_size is None:
-                self.vocab_size = 49152 # Fallback default
+
+    @classmethod
+    def from_metadata(cls, **overrides):
+        """Create a GPT2Config instance with optional overrides."""
+        return cls(**overrides)

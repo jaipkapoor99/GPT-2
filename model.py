@@ -13,12 +13,19 @@ Implements:
 """
 
 import math
+import socket
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple, List
 from config import GPT2Config
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
+
+def _find_free_port():
+    """Find a free TCP port on localhost to avoid EADDRINUSE crashes."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
 
 def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     """ Apply Rotary Position Embedding (RoPE) to input tensor x """
@@ -72,12 +79,8 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = nn.Linear(config.C, config.C, bias=False)
         self.c_proj.NANOGPT_SCALE_INIT = 1
         
-        if config.use_qk_norm:
-            self.q_norm = RMSNorm(self.head_dim)
-            self.k_norm = RMSNorm(self.head_dim)
-        else:
-            self.q_norm = None
-            self.k_norm = None
+        self.q_norm = RMSNorm(self.head_dim)
+        self.k_norm = RMSNorm(self.head_dim)
 
     def forward(self, x: torch.Tensor, rot_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         B, T, C = x.size()
@@ -185,10 +188,7 @@ class GPT2(nn.Module):
         ))
         self.lm_head = nn.Linear(config.C, self.vocab_size, bias=False)
 
-        if config.use_rope:
-            self.rotary_emb = RotaryEmbedding(config.head_dim, max_seq_len=config.T, base=config.rope_base)
-        else:
-            self.rotary_emb = None
+        self.rotary_emb = RotaryEmbedding(config.head_dim, max_seq_len=config.T, base=config.rope_base)
             
         # Weight Tying
         self.transformer.wte.weight = self.lm_head.weight
@@ -220,21 +220,15 @@ class GPT2(nn.Module):
         assert T + past_length <= self.config.T, f"Cannot forward sequence length {T + past_length}, model block size is {self.config.T}"
         
         tok_emb = self.transformer.wte(idx)
-        if self.config.use_rope and self.rotary_emb is not None:
-            x = self.transformer.drop(tok_emb)
-            rot_emb = self.rotary_emb(x, T, offset=past_length)
-        else:
-            pos = torch.arange(past_length, past_length + T, dtype=torch.long, device=idx.device)
-            pos_emb = self.transformer.wpe(pos)
-            x = self.transformer.drop(tok_emb + pos_emb)
-            rot_emb = None
+        x = self.transformer.drop(tok_emb)
+        rot_emb = self.rotary_emb(x, T, offset=past_length)
         
         present_key_values = [] if use_cache else None
         
         for i, block in enumerate(self.transformer.h):
             past_kv = past_key_values[i] if past_key_values is not None else None
             
-            if self.config.gradient_checkpointing and self.training:
+            if getattr(self.config, 'gradient_checkpointing', False) and self.training:
                 # Cache is not supported with gradient checkpointing
                 x, _ = torch.utils.checkpoint.checkpoint(block, x, rot_emb, None, use_reentrant=False)
             else:
@@ -257,39 +251,34 @@ class GPT2(nn.Module):
             return CausalLMOutputWithCrossAttentions(loss=loss, logits=logits, past_key_values=present_key_values)
         return CausalLMOutputWithCrossAttentions(loss=loss, logits=logits)
 
-    def configure_optimizers(self, optimizer_type: str, learning_rate: float, device_type: str = 'cuda'):
-        """ Configure AdamW or Hybrid Muon + AdamW optimizers """
+    def configure_optimizers(self, learning_rate: float, device_type: str = 'cuda'):
+        """Hybrid Muon + AdamW optimizer setup.
+        
+        Muon handles 2D weight matrices (attention, MLP projections).
+        AdamW handles everything else (embeddings, norms, biases).
+        """
         from muon import Muon
-        if optimizer_type == "muon":
-            if not torch.distributed.is_initialized():
-                backend = "nccl" if device_type == "cuda" else "gloo"
-                torch.distributed.init_process_group(
-                    backend=backend,
-                    rank=0,
-                    world_size=1,
-                    init_method="tcp://127.0.0.1:29505"
-                )
-            muon_params = [p for name, p in self.named_parameters() if p.ndim == 2 and 'wte' not in name and 'wpe' not in name]
-            adamw_decay_params = [p for name, p in self.named_parameters() if p.ndim < 2 and 'wte' not in name and 'wpe' not in name and p.requires_grad]
-            adamw_nodecay_params = [p for name, p in self.named_parameters() if ('wte' in name or 'wpe' in name) and p.requires_grad]
-            
-            adamw_groups = [
-                {"params": adamw_decay_params, "weight_decay": 0.1},
-                {"params": adamw_nodecay_params, "weight_decay": 0.0}
-            ]
-            
-            optimizer_muon = Muon(muon_params, lr=0.04, momentum=0.95)
-            optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=learning_rate, betas=(0.9, 0.95), fused=True)
-            return optimizer_muon, optimizer_adamw
-        else:
-            decay_params = [p for name, p in self.named_parameters() if p.ndim >= 2 and 'wte' not in name]
-            nodecay_params = [p for name, p in self.named_parameters() if p.ndim < 2 or 'wte' in name]
-            adamw_groups = [
-                {"params": decay_params, "weight_decay": 0.1},
-                {"params": nodecay_params, "weight_decay": 0.0}
-            ]
-            optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=learning_rate, betas=(0.9, 0.95), fused=True)
-            return None, optimizer_adamw
+        if not torch.distributed.is_initialized():
+            backend = "nccl" if device_type == "cuda" else "gloo"
+            port = _find_free_port()
+            torch.distributed.init_process_group(
+                backend=backend,
+                rank=0,
+                world_size=1,
+                init_method=f"tcp://127.0.0.1:{port}"
+            )
+        muon_params = [p for name, p in self.named_parameters() if p.ndim == 2 and 'wte' not in name and 'wpe' not in name]
+        adamw_decay_params = [p for name, p in self.named_parameters() if p.ndim < 2 and 'wte' not in name and 'wpe' not in name and p.requires_grad]
+        adamw_nodecay_params = [p for name, p in self.named_parameters() if ('wte' in name or 'wpe' in name) and p.requires_grad]
+        
+        adamw_groups = [
+            {"params": adamw_decay_params, "weight_decay": 0.1},
+            {"params": adamw_nodecay_params, "weight_decay": 0.0}
+        ]
+        
+        optimizer_muon = Muon(muon_params, lr=0.04, momentum=0.95)
+        optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=learning_rate, betas=(0.9, 0.95), fused=True)
+        return optimizer_muon, optimizer_adamw
 
     @torch.no_grad()
     def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: Optional[int] = None):
@@ -320,44 +309,3 @@ class GPT2(nn.Module):
             
         return idx
 
-    @classmethod
-    def from_pretrained(cls, model_type: str = "gpt2"):
-        """ Load official OpenAI pre-trained GPT-2 weights into scratch PyTorch model """
-        from transformers import GPT2LMHeadModel
-        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
-        print(f"Loading pre-trained weights for {model_type} from Hugging Face...")
-        
-        config_args = {
-            'gpt2':        dict(n_layer=12, n_head=12, C=768),
-            'gpt2-medium': dict(n_layer=24, n_head=16, C=1024),
-            'gpt2-large':  dict(n_layer=36, n_head=20, C=1280),
-            'gpt2-xl':     dict(n_layer=48, n_head=25, C=1600),
-        }[model_type]
-        config_args['vocab_size'] = 50257
-        config_args['T'] = 1024
-        
-        config = GPT2Config(**config_args)
-        model = GPT2(config)
-        sd = model.state_dict()
-        
-        model_hf = GPT2LMHeadModel.from_pretrained(model_type)
-        sd_hf = model_hf.state_dict()
-        sd_keys_hf = [k for k in sd_hf.keys() if not k.endswith('.attn.masked_bias') and not k.endswith('.attn.bias')]
-        
-        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight']
-        for k in sd_keys_hf:
-            if any(k.endswith(w) for w in transposed):
-                if k in sd and sd_hf[k].shape[::-1] == sd[k].shape:
-                    with torch.no_grad():
-                        sd[k].copy_(sd_hf[k].t())
-            elif k in sd:
-                if sd_hf[k].shape == sd[k].shape:
-                    with torch.no_grad():
-                        sd[k].copy_(sd_hf[k])
-                elif k == 'transformer.wte.weight' or k == 'lm_head.weight':
-                    with torch.no_grad():
-                        # Copy only the first vocab_size elements to handle vocab padding
-                        sd[k][:sd_hf[k].shape[0], :].copy_(sd_hf[k])
-                    
-        print(f"Successfully loaded official {model_type} weights!")
-        return model
