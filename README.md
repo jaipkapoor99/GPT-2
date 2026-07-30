@@ -53,7 +53,7 @@ ultron/
 ├── dataset.py            # Zero-Copy Memmap Sharded Dataset Loader
 ├── train.py              # Main Distributed Accelerated Training Script
 ├── trainer.py            # Trainer Class with Keller Jordan Muon + AdamW
-├── generate.py           # Multi-sample text generation from local Accelerate checkpoint
+├── generate.py           # Text generation from local Accelerate checkpoint
 ├── requirements.txt      # Dependencies
 ├── README.md             # Project Overview & Architecture Guide
 ├── tests/                # Unit & Integration Tests (Accelerate + torch.testing)
