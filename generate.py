@@ -1,5 +1,5 @@
 """
-generate.py — Text generation from a local GPT-2 Accelerate checkpoint.
+generate.py — Text generation from a local Ultron Accelerate checkpoint.
 
 Usage:
     accelerate launch generate.py
@@ -12,8 +12,8 @@ import json
 import torch
 from transformers import AutoTokenizer
 from accelerate import Accelerator
-from config import GPT2Config
-from model import GPT2
+from config import UltronConfig
+from model import UltronModel
 
 # ── Accelerate guard ────────────────────────────────────────────────────────
 if not any(k in os.environ for k in [
@@ -25,7 +25,7 @@ if not any(k in os.environ for k in [
 accelerator = Accelerator()
 
 
-def load_model_weights(model: GPT2, checkpoint_dir: str) -> GPT2:
+def load_model_weights(model: UltronModel, checkpoint_dir: str) -> UltronModel:
     """Load weights from an Accelerate checkpoint, stripping _orig_mod. prefix if present."""
     weight_file = None
     for fname in ("model.safetensors", "pytorch_model.bin",
@@ -65,7 +65,7 @@ def load_model_weights(model: GPT2, checkpoint_dir: str) -> GPT2:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GPT-2 text generation")
+    parser = argparse.ArgumentParser(description="Ultron text generation")
     parser.add_argument("--prompt", type=str, default="Hello, my name is",
                         help="Prompt to continue")
     parser.add_argument("--max-tokens", type=int, default=200,
@@ -85,8 +85,8 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    config = GPT2Config()
-    model = GPT2(config)
+    config = UltronConfig()
+    model = UltronModel(config)
     model = load_model_weights(model, args.checkpoint)
 
     # Prepare model with Accelerate for device/precision handling

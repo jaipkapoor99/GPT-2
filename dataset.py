@@ -10,7 +10,7 @@ import glob
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-from config import GPT2Config
+from config import UltronConfig
 
 class ZeroCopyShardedDataset(Dataset):
     """
@@ -59,7 +59,7 @@ class ZeroCopyShardedDataset(Dataset):
                 
         raise IndexError(f"Index {idx} out of range for dataset size {self.total_sequences}")
 
-def get_dataloaders(config: GPT2Config, accelerator):
+def get_dataloaders(config: UltronConfig, accelerator):
     bin_shards = sorted(glob.glob("shards/fineweb_shard_*.bin") + glob.glob("shards_edu/fineweb_edu_shard_*.bin"))
     
     if not bin_shards:

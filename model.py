@@ -1,5 +1,5 @@
 """
-GPT-2 (124M) PyTorch Model Module (2026 SOTA Standards)
+Ultron (124M) PyTorch Model Module (2026 SOTA Standards)
 Implements:
 1. FlashAttention-2 (F.scaled_dot_product_attention) with smart context enforcement
 2. SwiGLU Gated FeedForward Network (LLaMA 3 / Qwen 2.5 architecture)
@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple, List
-from config import GPT2Config
+from config import UltronConfig
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
 def _find_free_port():
@@ -60,7 +60,7 @@ class RotaryEmbedding(nn.Module):
 
 class CausalSelfAttention(nn.Module):
     """ High-performance Grouped-Query Attention (GQA) with RoPE using PyTorch FlashAttention """
-    def __init__(self, config: GPT2Config):
+    def __init__(self, config: UltronConfig):
         super().__init__()
         assert config.C % config.n_head == 0
         assert config.n_head % config.n_kv_head == 0
@@ -123,15 +123,12 @@ class CausalSelfAttention(nn.Module):
         is_causal = self.training or q.size(2) > 1
         y = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal, dropout_p=dropout_p)
 
-
-
-        
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.c_proj(y), new_past_key_value
 
 class SwiGLUMLP(nn.Module):
     """ Modern SwiGLU FeedForward Network (used in LLaMA 3, Qwen 2.5, & Mistral) """
-    def __init__(self, config: GPT2Config):
+    def __init__(self, config: UltronConfig):
         super().__init__()
         hidden_dim = int(2 * (4 * config.C) / 3)
         hidden_dim = 64 * ((hidden_dim + 63) // 64) # Round to multiple of 64 for Tensor Cores
@@ -157,7 +154,7 @@ class RMSNorm(nn.Module):
 
 class Block(nn.Module):
     """ Transformer Block: Communication (FlashAttention) + Computation (SwiGLU MLP) """
-    def __init__(self, config: GPT2Config):
+    def __init__(self, config: UltronConfig):
         super().__init__()
         self.ln_1 = RMSNorm(config.C)
         self.attn = CausalSelfAttention(config)
@@ -170,9 +167,9 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x, present_key_value
 
-class GPT2(nn.Module):
-    """ Full GPT-2 (124M) Language Model Class with RMSNorm, RoPE, & GQA """
-    def __init__(self, config: GPT2Config):
+class UltronModel(nn.Module):
+    """ Full Ultron (124M) Language Model Class with RMSNorm, RoPE, & GQA """
+    def __init__(self, config: UltronConfig):
         super().__init__()
         self.config = config
         

@@ -1,6 +1,6 @@
 """
-GPT-2 Configuration Module
-Contains dataclass parameters for the 2026-standard GPT-2 (124M) architecture.
+Ultron Configuration Module
+Contains dataclass parameters for the 2026-standard Ultron (124M) architecture.
 All hyper-parameter fields have sensible 2026 SOTA defaults.
 """
 
@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 @dataclass
-class GPT2Config:
+class UltronConfig:
     B: int = 16                 # Micro-batch size per pass (65k tokens/step with grad accum 4)
     grad_accum_steps: int = 4   # Gradient accumulation steps
     T: int = 1024               # Time / Sequence length (T)
@@ -35,5 +35,6 @@ class GPT2Config:
 
     @classmethod
     def from_metadata(cls, **overrides):
-        """Create a GPT2Config instance with optional overrides."""
+        """Create an UltronConfig instance with optional overrides."""
         return cls(**overrides)
+

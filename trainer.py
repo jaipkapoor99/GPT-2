@@ -6,7 +6,7 @@ import time
 from accelerate import Accelerator
 
 
-class GPT2Trainer:
+class UltronTrainer:
     def __init__(self, model, optimizer_muon, optimizer_adamw, train_loader, dev_loader, config, accelerator: Accelerator):
         self.model = model
         self.optimizer_muon = optimizer_muon

@@ -1,9 +1,16 @@
 """
-Unit and Integration Tests for GPT-2 (124M 2026 SOTA)
+Unit and Integration Tests for Ultron (124M 2026 SOTA)
 Using torch.testing assertions, Accelerate device management, rich colorful logs, and emojis.
 """
 
 import sys, os
+
+# ── Accelerate guard ────────────────────────────────────────────────────────
+if not any(k in os.environ for k in [
+    "ACCELERATE_TORCH_DEVICE", "ACCELERATE_PROCESS_ID", "LOCAL_RANK", "ACCELERATE_MIXED_PRECISION"
+]):
+    raise RuntimeError("Run with: accelerate launch <script>.py ...")
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
@@ -11,21 +18,21 @@ import torch.testing as tt
 import unittest
 from accelerate import Accelerator
 from rich.console import Console
-from config import GPT2Config
-from model import GPT2, RMSNorm, apply_rotary_emb
+from config import UltronConfig
+from model import UltronModel, RMSNorm, apply_rotary_emb
 
 console = Console()
 accelerator = Accelerator()
 device = accelerator.device
 
-class TestGPT2Model(unittest.TestCase):
+class TestUltronModel(unittest.TestCase):
 
     def setUp(self):
         console.print(f"[bold cyan]⚙️ Setting up test on device:[/bold cyan] [bold yellow]{device}[/bold yellow]")
 
     def test_config_defaults(self):
-        console.print("[bold blue]📋 Testing GPT2Config default parameters...[/bold blue]")
-        cfg = GPT2Config()
+        console.print("[bold blue]📋 Testing UltronConfig default parameters...[/bold blue]")
+        cfg = UltronConfig()
         console.print(f"  [green]• C:[/green] [bold white]{cfg.C}[/bold white], [green]n_head:[/green] [bold white]{cfg.n_head}[/bold white], [green]n_kv_head:[/green] [bold white]{cfg.n_kv_head}[/bold white], [green]head_dim:[/green] [bold white]{cfg.head_dim}[/bold white], [green]vocab_size:[/green] [bold white]{cfg.vocab_size}[/bold white]")
         self.assertEqual(cfg.C, 768)
         self.assertEqual(cfg.n_head, 12)
@@ -36,9 +43,9 @@ class TestGPT2Model(unittest.TestCase):
         console.print("[bold green]✅ test_config_defaults passed successfully![/bold green]\n")
 
     def test_model_forward_shape(self):
-        console.print("[bold blue]⚡ Testing GPT2 model forward pass output shape...[/bold blue]")
-        cfg = GPT2Config(n_layer=2)
-        model = GPT2(cfg)
+        console.print("[bold blue]⚡ Testing Ultron model forward pass output shape...[/bold blue]")
+        cfg = UltronConfig(n_layer=2)
+        model = UltronModel(cfg)
         model = accelerator.prepare(model)
         model.eval()
         
@@ -54,12 +61,12 @@ class TestGPT2Model(unittest.TestCase):
         console.print("[bold green]✅ test_model_forward_shape passed successfully![/bold green]\n")
 
     def test_torch_compile_forward(self):
-        console.print("[bold blue]🔥 Testing GPT2 model graph compilation with torch.compile()...[/bold blue]")
-        cfg = GPT2Config(n_layer=2)
-        model = GPT2(cfg)
+        console.print("[bold blue]🔥 Testing Ultron model graph compilation with torch.compile()...[/bold blue]")
+        cfg = UltronConfig(n_layer=2)
+        model = UltronModel(cfg)
         model = accelerator.prepare(model)
-        model = torch.compile(model)
         model.eval()
+        model = torch.compile(model)
         
         B, T = 2, 64
         idx = torch.randint(0, cfg.vocab_size, (B, T), dtype=torch.long, device=device)
@@ -72,9 +79,9 @@ class TestGPT2Model(unittest.TestCase):
         console.print("[bold green]✅ test_torch_compile_forward passed successfully![/bold green]\n")
 
     def test_model_loss_computation(self):
-        console.print("[bold blue]🎯 Testing GPT2 model cross-entropy loss computation...[/bold blue]")
-        cfg = GPT2Config(n_layer=2)
-        model = GPT2(cfg)
+        console.print("[bold blue]🎯 Testing Ultron model cross-entropy loss computation...[/bold blue]")
+        cfg = UltronConfig(n_layer=2)
+        model = UltronModel(cfg)
         model = accelerator.prepare(model)
         
         B, T = 2, 64
@@ -88,9 +95,9 @@ class TestGPT2Model(unittest.TestCase):
         console.print("[bold green]✅ test_model_loss_computation passed successfully![/bold green]\n")
 
     def test_model_generation(self):
-        console.print("[bold blue]🤖 Testing GPT2 autoregressive text generation...[/bold blue]")
-        cfg = GPT2Config(n_layer=2)
-        model = GPT2(cfg)
+        console.print("[bold blue]🤖 Testing Ultron autoregressive text generation...[/bold blue]")
+        cfg = UltronConfig(n_layer=2)
+        model = UltronModel(cfg)
         unwrapped_model = accelerator.unwrap_model(accelerator.prepare(model))
         unwrapped_model.eval()
         
@@ -120,8 +127,8 @@ class TestGPT2Model(unittest.TestCase):
 
     def test_rotary_embedding(self):
         console.print("[bold blue]🔄 Testing Rotary Position Embedding (RoPE) tensor application...[/bold blue]")
-        cfg = GPT2Config(n_layer=1)
-        model = GPT2(cfg)
+        cfg = UltronConfig(n_layer=1)
+        model = UltronModel(cfg)
         unwrapped_model = accelerator.unwrap_model(accelerator.prepare(model))
         
         B, T, n_head, head_dim = 2, 16, 12, 64
@@ -139,3 +146,4 @@ class TestGPT2Model(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
