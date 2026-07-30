@@ -2,23 +2,31 @@
 generate.py — Text generation from a local GPT-2 Accelerate checkpoint.
 
 Usage:
-    python3 generate.py
-    python3 generate.py --prompt "The theory of relativity" --max-tokens 150 --temperature 0.8 --top-k 50
+    accelerate launch generate.py
+    accelerate launch generate.py --prompt "The theory of relativity" --max-tokens 150 --temperature 0.8 --top-k 50
 """
 
 import argparse
 import os
+import json
 import torch
 from transformers import AutoTokenizer
-
+from accelerate import Accelerator
 from config import GPT2Config
 from model import GPT2
 
+# ── Accelerate guard ────────────────────────────────────────────────────────
+if not any(k in os.environ for k in [
+    "ACCELERATE_TORCH_DEVICE", "ACCELERATE_PROCESS_ID", "LOCAL_RANK", "ACCELERATE_MIXED_PRECISION"
+]):
+    raise RuntimeError("Run with: accelerate launch generate.py ...")
 
-def load_model_weights(model: GPT2, checkpoint_dir: str, device: torch.device) -> GPT2:
+# Initialize Accelerator
+accelerator = Accelerator()
+
+
+def load_model_weights(model: GPT2, checkpoint_dir: str) -> GPT2:
     """Load weights from an Accelerate checkpoint, stripping _orig_mod. prefix if present."""
-    # Accelerate saves model weights in a sub-folder named 'pytorch_model'
-    # or directly as 'model.safetensors' / 'pytorch_model.bin'
     weight_file = None
     for fname in ("model.safetensors", "pytorch_model.bin",
                   "pytorch_model/model.safetensors", "pytorch_model/pytorch_model.bin"):
@@ -33,13 +41,13 @@ def load_model_weights(model: GPT2, checkpoint_dir: str, device: torch.device) -
             "Expected one of: pytorch_model/model.safetensors, pytorch_model.bin, model.safetensors"
         )
 
-    print(f"Loading weights from: {weight_file}")
+    accelerator.print(f"Loading weights from: {weight_file}")
 
     if weight_file.endswith(".safetensors"):
         from safetensors.torch import load_file
-        state_dict = load_file(weight_file, device=str(device))
+        state_dict = load_file(weight_file, device=str(accelerator.device))
     else:
-        state_dict = torch.load(weight_file, map_location=device, weights_only=True)
+        state_dict = torch.load(weight_file, map_location=accelerator.device, weights_only=True)
 
     # Strip _orig_mod. prefix inserted by torch.compile
     cleaned = {}
@@ -49,9 +57,9 @@ def load_model_weights(model: GPT2, checkpoint_dir: str, device: torch.device) -
 
     missing, unexpected = model.load_state_dict(cleaned, strict=False)
     if missing:
-        print(f"  Missing keys  : {len(missing)}")
+        accelerator.print(f"  Missing keys  : {len(missing)}")
     if unexpected:
-        print(f"  Unexpected    : {len(unexpected)}")
+        accelerator.print(f"  Unexpected    : {len(unexpected)}")
 
     return model
 
@@ -70,33 +78,40 @@ def main():
                         help="Accelerate checkpoint directory")
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device : {device}")
+    accelerator.print(f"Device : {accelerator.device}")
 
     # ── Tokenizer ─────────────────────────────────────────────────────────────
-    print("Loading tokenizer...")
+    accelerator.print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
 
     # ── Model ─────────────────────────────────────────────────────────────────
     config = GPT2Config()
-    model = GPT2(config).to(device)
-    model = load_model_weights(model, args.checkpoint, device)
+    model = GPT2(config)
+    model = load_model_weights(model, args.checkpoint)
+
+    # Prepare model with Accelerate for device/precision handling
+    model = accelerator.prepare(model)
     model.eval()
 
     # Print step info if available
-    import json
     state_file = os.path.join(args.checkpoint, "training_state.json")
     if os.path.exists(state_file):
         with open(state_file) as f:
             st = json.load(f)
-        print(f"Step   : {st['step']:,} / {st['max_steps']:,}")
+        accelerator.print(f"Step   : {st['step']:,} / {st['max_steps']:,}")
 
     # ── Generate ──────────────────────────────────────────────────────────────
-    print(f"\nPrompt : {args.prompt!r}\n")
-    input_ids = tokenizer.encode(args.prompt, return_tensors="pt").to(device)
+    accelerator.print(f"\nPrompt : {args.prompt!r}\n")
 
-    with torch.no_grad():
-        output_ids = model.generate(
+    # Encode input prompt and move to device
+    input_ids = tokenizer.encode(args.prompt, return_tensors="pt")
+    input_ids = input_ids.to(accelerator.device)
+
+    # Unwrap model for inference if wrapped in DDP/FSDP container
+    unwrapped_model = accelerator.unwrap_model(model)
+
+    with torch.no_grad(), accelerator.autocast():
+        output_ids = unwrapped_model.generate(
             input_ids,
             max_new_tokens=args.max_tokens,
             temperature=args.temperature,
@@ -104,9 +119,9 @@ def main():
         )
 
     generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-    print("=" * 70)
-    print(generated)
-    print("=" * 70)
+    accelerator.print("=" * 70)
+    accelerator.print(generated)
+    accelerator.print("=" * 70)
 
 
 if __name__ == "__main__":
