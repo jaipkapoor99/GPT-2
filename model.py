@@ -294,11 +294,15 @@ class UltronModel(nn.Module):
     @torch.no_grad()
     def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: Optional[int] = None):
         """ Generate autoregressively given a prompt idx using KV caching (O(N)) """
+        max_prompt_len = max(1, self.config.T - max_new_tokens)
+        if idx.size(1) > max_prompt_len:
+            idx = idx[:, -max_prompt_len:]
+            
         past_key_values = None
         for i in range(max_new_tokens):
             if past_key_values is None:
                 # Pre-fill phase: process the entire prompt
-                idx_cond = idx if idx.size(1) <= self.config.T else idx[:, -self.config.T:]
+                idx_cond = idx
             else:
                 # Decoding phase: process only the last generated token
                 idx_cond = idx[:, -1:]
