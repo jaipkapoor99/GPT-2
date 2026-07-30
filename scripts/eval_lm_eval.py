@@ -39,14 +39,16 @@ def main():
         "math": ["gsm8k", "minerva_math"],
         "coding": ["humaneval", "mbpp"],
         "knowledge": ["lambada_openai", "truthfulqa_mc1", "triviaqa"],
+        "custom": ["custom_test_set"],
+        "test_set": ["custom_test_set"],
     }
-    TASK_SUITES["all"] = [t for suite in TASK_SUITES.values() for t in suite]
+    TASK_SUITES["all"] = [task for name, suite in TASK_SUITES.items() if name not in ("custom", "test_set") for task in suite]
 
     parser = argparse.ArgumentParser(description="Evaluate local Ultron model using lm-evaluation-harness")
     parser.add_argument("--checkpoint", type=str, default="accelerate_checkpoint", help="Path to local checkpoint directory")
-    parser.add_argument("--suite", type=str, choices=list(TASK_SUITES.keys()), default=None, help="Preset benchmark suite (reasoning, math, coding, knowledge, all)")
+    parser.add_argument("--suite", type=str, choices=list(TASK_SUITES.keys()), default=None, help="Preset benchmark suite (reasoning, math, coding, knowledge, custom, test_set, all)")
     parser.add_argument("--tasks", type=str, default=None, help="Comma-separated list of lm-eval tasks (overrides --suite)")
-    parser.add_argument("--limit", type=int, default=None, help="Limit number of samples per task (for fast debugging)")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of samples/batches per task (for fast debugging)")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size per GPU for evaluation")
     args = parser.parse_args()
 
@@ -73,6 +75,44 @@ def main():
     native_config = UltronConfig()
     native_model = UltronModel(native_config)
     native_model = load_model_weights(native_model, args.checkpoint)
+
+    if task_list == ["custom_test_set"]:
+        if accelerator.is_main_process:
+            console.print("[bold blue]📊 Evaluating Ultron model on local test dataset split...[/bold blue]")
+
+        from dataset import get_dataloaders
+        import math
+
+        _, _, test_loader = get_dataloaders(native_config, accelerator)
+        total_loss = 0.0
+        total_batches = 0
+
+        native_model.eval()
+        with torch.no_grad():
+            for i, (x, y) in enumerate(test_loader):
+                if args.limit and i >= args.limit:
+                    break
+                out = native_model(x, targets=y)
+                total_loss += out.loss.item()
+                total_batches += 1
+
+        avg_loss = total_loss / max(1, total_batches)
+        perplexity = math.exp(avg_loss)
+        bpc = avg_loss / math.log(2)
+
+        if accelerator.is_main_process:
+            table = Table(title="🏆 Ultron Custom Test Set Evaluation", show_header=True, header_style="bold magenta")
+            table.add_column("Dataset Split", style="cyan")
+            table.add_column("Metric", style="yellow")
+            table.add_column("Score", style="bold green")
+
+            table.add_row("local_test_set", "cross_entropy_loss", f"{avg_loss:.4f}")
+            table.add_row("local_test_set", "perplexity", f"{perplexity:.4f}")
+            table.add_row("local_test_set", "bits_per_character", f"{bpc:.4f}")
+
+            console.print("\n")
+            console.print(table)
+        return
 
     # Wrap in UltronForCausalLM
     hf_config = UltronHFConfig.from_ultron_config(native_config)

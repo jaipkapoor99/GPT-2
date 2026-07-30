@@ -259,11 +259,29 @@ accelerate launch generate.py --prompt "..." --temperature 0.85 --top-k 50 --max
 
 ## 🏆 Benchmarking & Evaluation (`lm-evaluation-harness`)
 
-Evaluate local Ultron checkpoints directly in-memory against standard online benchmarks (`HellaSwag`, `LAMBADA`, `PIQA`, `ARC-Easy`, `ARC-Challenge`) using EleutherAI's `lm-evaluation-harness`:
+Evaluate local Ultron checkpoints directly in-memory against standard online benchmarks using EleutherAI's `lm-evaluation-harness`:
 
 ```bash
-accelerate launch scripts/eval_lm_eval.py --checkpoint=accelerate_checkpoint --tasks=hellaswag,lambada_openai,piqa,arc_easy,arc_challenge
+# Preset Benchmark Suites
+accelerate launch scripts/eval_lm_eval.py --suite=reasoning --limit=100
+accelerate launch scripts/eval_lm_eval.py --suite=math
+accelerate launch scripts/eval_lm_eval.py --suite=coding
+accelerate launch scripts/eval_lm_eval.py --suite=knowledge
+accelerate launch scripts/eval_lm_eval.py --suite=all
+
+# Custom Tasks
+accelerate launch scripts/eval_lm_eval.py --tasks=hellaswag,lambada_openai,piqa,arc_easy,arc_challenge
 ```
+
+### Preset Benchmark Suites (`--suite`)
+
+| Suite Flag | Included Benchmarks | Category |
+| :--- | :--- | :--- |
+| `--suite=reasoning` | `hellaswag`, `arc_easy`, `arc_challenge`, `piqa`, `winogrande`, `mmlu`, `drop` | Reasoning & Commonsense |
+| `--suite=math` | `gsm8k`, `minerva_math` | Math & Logic |
+| `--suite=coding` | `humaneval`, `mbpp` | Coding & Technical |
+| `--suite=knowledge` | `lambada_openai`, `truthfulqa_mc1`, `triviaqa` | Language & World Knowledge |
+| `--suite=all` | All 14 benchmark tasks combined | Complete Assessment |
 
 ### Zero-Shot Benchmark Results
 
@@ -274,31 +292,6 @@ accelerate launch scripts/eval_lm_eval.py --checkpoint=accelerate_checkpoint --t
 | **LAMBADA** | Accuracy (`acc`) | **15.00%** | — | Mid-training baseline |
 | **ARC-Easy** | Accuracy (`acc`) | **50.00%** | — | Mid-training baseline |
 | **ARC-Challenge** | Accuracy (`acc`) | **10.00%** | — | Mid-training baseline |
-
----
-
-## 🚀 Hugging Face Export & Hub Upload
-
-Export local Accelerate checkpoints to Hugging Face format (`safetensors`, `config.json`, `hf_model.py`) and upload to Hugging Face Hub (`jaipkapoor99/ultron-124m`):
-
-```bash
-python3 scripts/export_to_hf.py
-```
-
-The export pipeline:
-
-1. Executes unit tests (`tests/test_hf_wrapper.py`) to verify parameter pointer tying and logit parity.
-2. Packages model weights, config, and `hf_model.py` into `hf_export/`.
-3. Publishes model artifacts to Hugging Face Hub (`jaipkapoor99/ultron-124m`).
-
-Once published, load Ultron directly using standard Hugging Face Transformers:
-
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-model = AutoModelForCausalLM.from_pretrained("jaipkapoor99/ultron-124m", trust_remote_code=True)
-tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
-```
 
 ---
 
