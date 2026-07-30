@@ -1,15 +1,11 @@
 """
-hf_model.py — Hugging Face Integration Layer for Ultron (124M)
-
-Defines UltronHFConfig and UltronForCausalLM to make Ultron compatible with
-Hugging Face's AutoModelForCausalLM and PreTrainedModel interfaces.
+hf_model.py — Hugging Face Transformers integration module for Ultron architecture.
 """
 
+import math
 from typing import Optional, Tuple, List, Union
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import math
 from transformers import PreTrainedModel, PretrainedConfig, GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 try:
@@ -68,6 +64,21 @@ class UltronHFConfig(PretrainedConfig):
     def num_key_value_heads(self) -> int:
         return self.n_kv_head
 
+    @classmethod
+    def from_ultron_config(cls, ultron_config: UltronConfig) -> "UltronHFConfig":
+        """Convert internal UltronConfig dataclass to UltronHFConfig."""
+        return cls(
+            vocab_size=ultron_config.vocab_size,
+            n_positions=ultron_config.T,
+            n_embd=ultron_config.C,
+            n_layer=ultron_config.n_layer,
+            n_head=ultron_config.n_head,
+            n_kv_head=ultron_config.n_kv_head,
+            dropout=ultron_config.dropout,
+            rope_base=ultron_config.rope_base,
+            logit_softcap=ultron_config.logit_softcap,
+        )
+
     def to_ultron_config(self) -> UltronConfig:
         """Convert HF config to internal UltronConfig dataclass."""
         return UltronConfig(
@@ -116,6 +127,8 @@ class UltronForCausalLM(PreTrainedModel, GenerationMixin):
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
@@ -127,23 +140,23 @@ class UltronForCausalLM(PreTrainedModel, GenerationMixin):
 
         is_dynamic_cache = hasattr(past_key_values, "update") and hasattr(past_key_values, "layers")
 
+        seq_len = input_ids.size(1)
         if past_key_values is not None:
-            if is_dynamic_cache and hasattr(past_key_values, "get_seq_length"):
-                past_len = past_key_values.get_seq_length()
-            elif isinstance(past_key_values, (tuple, list)) and len(past_key_values) > 0 and past_key_values[0] is not None:
-                past_len = past_key_values[0][0].size(2)
+            if is_dynamic_cache:
+                past_length = past_key_values.get_seq_length()
             else:
-                past_len = 0
+                past_length = past_key_values[0][0].size(2) if past_key_values[0] is not None else 0
         else:
-            past_len = 0
+            past_length = 0
 
-        B, T = input_ids.size()
-        tok_emb = self.transformer.wte(input_ids)
-        x = self.transformer.drop(tok_emb)
-        rot_emb = self.rotary_emb(x, T, offset=past_len)
+        total_seq_len = past_length + seq_len
+        cos, sin = self.rotary_emb(input_ids, total_seq_len)
+        rot_emb = (cos, sin)
 
-        new_past_kv = [] if (use_cache and not is_dynamic_cache) else None
+        x = self.transformer.wte(input_ids)
+        x = self.transformer.drop(x)
 
+        new_past_kv = []
         for i, block in enumerate(self.transformer.h):
             if past_key_values is not None:
                 if is_dynamic_cache and i < len(past_key_values.layers):
@@ -161,11 +174,7 @@ class UltronForCausalLM(PreTrainedModel, GenerationMixin):
 
             if use_cache:
                 if is_dynamic_cache:
-                    if i < len(past_key_values.layers):
-                        past_key_values.layers[i].keys = present_kv[0]
-                        past_key_values.layers[i].values = present_kv[1]
-                    else:
-                        past_key_values.update(present_kv[0], present_kv[1], i)
+                    past_key_values.update(present_kv[0], present_kv[1], i)
                 else:
                     new_past_kv.append(present_kv)
 
@@ -178,39 +187,16 @@ class UltronForCausalLM(PreTrainedModel, GenerationMixin):
         if labels is not None:
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), ignore_index=-1)
 
-        returned_cache = past_key_values if is_dynamic_cache else (tuple(new_past_kv) if use_cache else None)
-
-        output = CausalLMOutputWithCrossAttentions(
-            loss=loss,
-            logits=logits,
-            past_key_values=returned_cache,
-        )
+        past_return = past_key_values if is_dynamic_cache else (tuple(new_past_kv) if use_cache else None)
 
         if not return_dict:
-            res = (output.logits,)
-            if output.past_key_values is not None:
-                res = res + (output.past_key_values,)
-            if output.loss is not None:
-                res = (output.loss,) + res
-            return res
+            output = (logits,) + ((past_return,) if past_return is not None else ())
+            return ((loss,) + output) if loss is not None else output
 
-        return output
-
-    def prepare_inputs_for_generation(
-        self, input_ids, past_key_values=None, **kwargs
-    ):
-        if past_key_values is not None:
-            input_ids = input_ids[:, -1:]
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": kwargs.get("use_cache", True),
-        }
-
-
-# Register for AutoClass dynamic loading
-UltronHFConfig.register_for_auto_class()
-UltronForCausalLM.register_for_auto_class("AutoModelForCausalLM")
+        return CausalLMOutputWithCrossAttentions(
+            loss=loss,
+            logits=logits,
+            past_key_values=past_return,
+        )

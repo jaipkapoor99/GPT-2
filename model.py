@@ -17,12 +17,21 @@ import socket
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from dataclasses import dataclass
 from typing import Optional, Tuple, List
+
 try:
     from .config import UltronConfig
 except ImportError:
     from config import UltronConfig
-from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
+
+
+@dataclass
+class UltronOutput:
+    """Output class for UltronModel containing logits, optional loss, and optional KV cache."""
+    logits: torch.Tensor
+    loss: Optional[torch.Tensor] = None
+    past_key_values: Optional[Tuple] = None
 
 def _find_free_port():
     """Find a free TCP port on localhost to avoid EADDRINUSE crashes."""
@@ -250,8 +259,8 @@ class UltronModel(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             
         if use_cache:
-            return CausalLMOutputWithCrossAttentions(loss=loss, logits=logits, past_key_values=present_key_values)
-        return CausalLMOutputWithCrossAttentions(loss=loss, logits=logits)
+            return UltronOutput(logits=logits, loss=loss, past_key_values=present_key_values)
+        return UltronOutput(logits=logits, loss=loss)
 
     def configure_optimizers(self, learning_rate: float, device_type: str = 'cuda'):
         """Hybrid Muon + AdamW optimizer setup.
