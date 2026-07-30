@@ -68,11 +68,14 @@ def main():
     hf_model.save_pretrained(EXPORT_DIR)
     hf_config.save_pretrained(EXPORT_DIR)
 
-    # Copy hf_model.py into export directory so trust_remote_code=True works out-of-the-box
-    hf_model_src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hf_model.py")
-    hf_model_dst = os.path.join(EXPORT_DIR, "hf_model.py")
-    with open(hf_model_src, "r") as f_src, open(hf_model_dst, "w") as f_dst:
-        f_dst.write(f_src.read())
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Copy hf_model.py, model.py, and config.py into export directory so trust_remote_code=True works out-of-the-box
+    for fname in ("hf_model.py", "model.py", "config.py"):
+        src = os.path.join(root_dir, fname)
+        dst = os.path.join(EXPORT_DIR, fname)
+        if os.path.exists(src):
+            with open(src, "r") as f_src, open(dst, "w") as f_dst:
+                f_dst.write(f_src.read())
 
     # Build model card README from model_card.yaml + root README.md
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

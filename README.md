@@ -23,7 +23,7 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 - **Zero-Copy Data Loader:** Memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead during multi-billion token streaming.
 
 > [!NOTE]
-> **Hugging Face Component (TODO):** Hugging Face Hub uploads, pipeline wrappers, and remote model publishing are intentionally deferred as future **TODO** items. Current focus is strictly local-first pre-training and benchmarking.
+> **Hugging Face Pipeline (Under Active Development):** Hugging Face Hub integration, remote pipeline wrappers (`UltronForCausalLM`), and HF export scripts (`export_to_hf.py`, `generate_from_hf.py`) are currently parked and under active development. Primary focus remains on native local pre-training and optimization.
 
 ---
 
