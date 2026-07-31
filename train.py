@@ -6,7 +6,6 @@ Usage:
 """
 
 import argparse
-import dataclasses
 import os
 import torch
 from accelerate import Accelerator
@@ -15,13 +14,6 @@ from accelerate import Accelerator
 from config import UltronConfig
 from model import UltronModel
 from dataset import get_dataloaders
-
-
-
-
-def print_rich(accelerator: Accelerator, text: str):
-    pass
-
 
 def main():
     parser = argparse.ArgumentParser(description="Ultron (124M) Pre-training")
@@ -40,10 +32,10 @@ def main():
         config.max_steps = 100
         config.is_test_mode = True
 
-    accelerator = Accelerator(gradient_accumulation_steps=config.grad_accum_steps, log_with="wandb")
-    accelerator.init_trackers("ultron-pretraining", config=dataclasses.asdict(config))
+    from telemetry import UltronTelemetry
+    accelerator = UltronTelemetry.setup_accelerator_trackers(config, args)
 
-    train_loader, dev_loader, _ = get_dataloaders(config, accelerator)
+    train_loader, dev_loader = get_dataloaders(config, accelerator)
 
     model = UltronModel(config)
     torch.set_float32_matmul_precision('high')

@@ -1,0 +1,80 @@
+"""
+Ultron (124M) Checkpoint Uploader Script
+
+Uploads the local `accelerate_checkpoint/` directory and documentation to Hugging Face Hub.
+
+Usage:
+    python3 scripts/upload_checkpoint.py [--repo-id=USER/REPO] [--private]
+"""
+
+import os
+import argparse
+from pathlib import Path
+from rich.console import Console
+from huggingface_hub import HfApi, login
+
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import UltronConfig
+
+console = Console()
+
+def main():
+    config = UltronConfig()
+    parser = argparse.ArgumentParser(description="Upload Ultron checkpoint to Hugging Face Hub")
+    parser.add_argument("--repo-id", type=str, default=config.hf_repo_id, help=f"Target Hugging Face Repository ID (default: {config.hf_repo_id})")
+    parser.add_argument("--checkpoint-dir", type=str, default="accelerate_checkpoint", help="Path to local checkpoint directory")
+    parser.add_argument("--private", action="store_true", help="Set target repository to private")
+    args = parser.parse_args()
+
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        console.print("[bold yellow]⚠️ HF_TOKEN environment variable not set. Attempting login using stored credentials...[/bold yellow]")
+    else:
+        login(token=token)
+
+    api = HfApi(token=token)
+
+    if not os.path.exists(args.checkpoint_dir):
+        console.print(f"[bold red]❌ Error: Checkpoint directory '{args.checkpoint_dir}' does not exist![/bold red]")
+        return
+
+    console.print(f"[bold cyan]🤗 Initializing Hugging Face repository:[/bold cyan] [bold white]{args.repo_id}[/bold white]")
+    api.create_repo(repo_id=args.repo_id, exist_ok=True, private=args.private)
+
+    # 1. Upload Checkpoint Directory
+    console.print(f"[bold blue]📦 Uploading checkpoint directory '{args.checkpoint_dir}'...[/bold blue]")
+    api.upload_folder(
+        folder_path=args.checkpoint_dir,
+        repo_id=args.repo_id,
+        repo_type="model",
+        commit_message="Upload Ultron 124M Accelerate checkpoint weights and state"
+    )
+    console.print("[bold green]✅ Checkpoint files uploaded successfully![/bold green]")
+
+    # 2. Upload README.md and metadata.yaml if present
+    if os.path.exists("README.md"):
+        console.print("[bold blue]📄 Syncing README.md documentation...[/bold blue]")
+        api.upload_file(
+            path_or_fileobj="README.md",
+            path_in_repo="README.md",
+            repo_id=args.repo_id,
+            commit_message="Sync repository documentation"
+        )
+        console.print("[bold green]✅ README.md synced successfully![/bold green]")
+
+    if os.path.exists("metadata.yaml"):
+        console.print("[bold blue]⚙️ Syncing metadata.yaml configuration...[/bold blue]")
+        api.upload_file(
+            path_or_fileobj="metadata.yaml",
+            path_in_repo="metadata.yaml",
+            repo_id=args.repo_id,
+            commit_message="Sync model metadata.yaml"
+        )
+        console.print("[bold green]✅ metadata.yaml synced successfully![/bold green]")
+
+    console.print(f"\n[bold green]🚀 Checkpoint successfully deployed to:[/bold green] https://huggingface.co/{args.repo_id}\n")
+
+if __name__ == "__main__":
+    main()

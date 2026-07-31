@@ -91,7 +91,7 @@ class CausalSelfAttention(nn.Module):
         
         self.c_attn = nn.Linear(config.C, q_dim + 2 * kv_dim, bias=False)
         self.c_proj = nn.Linear(config.C, config.C, bias=False)
-        self.c_proj.NANOGPT_SCALE_INIT = 1
+        self.c_proj.RESIDUAL_SCALE_INIT = 1
         
         self.q_norm = RMSNorm(self.head_dim)
         self.k_norm = RMSNorm(self.head_dim)
@@ -150,7 +150,7 @@ class SwiGLUMLP(nn.Module):
         self.w1 = nn.Linear(config.C, hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, config.C, bias=False)
         self.w3 = nn.Linear(config.C, hidden_dim, bias=False)
-        self.w2.NANOGPT_SCALE_INIT = 1
+        self.w2.RESIDUAL_SCALE_INIT = 1
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
@@ -192,7 +192,6 @@ class UltronModel(nn.Module):
         
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(self.vocab_size, config.C),
-            wpe = nn.Embedding(config.T, config.C),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = RMSNorm(config.C),
@@ -216,7 +215,7 @@ class UltronModel(nn.Module):
     def _init_weights(self, module: nn.Module):
         if isinstance(module, nn.Linear):
             std = 0.02
-            if hasattr(module, 'NANOGPT_SCALE_INIT'):
+            if hasattr(module, 'RESIDUAL_SCALE_INIT'):
                 std *= (2 * self.config.n_layer) ** -0.5
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
@@ -278,9 +277,9 @@ class UltronModel(nn.Module):
                 world_size=1,
                 init_method=f"tcp://127.0.0.1:{port}"
             )
-        muon_params = [p for name, p in self.named_parameters() if p.ndim == 2 and 'wte' not in name and 'wpe' not in name]
-        adamw_decay_params = [p for name, p in self.named_parameters() if p.ndim < 2 and 'wte' not in name and 'wpe' not in name and p.requires_grad]
-        adamw_nodecay_params = [p for name, p in self.named_parameters() if ('wte' in name or 'wpe' in name) and p.requires_grad]
+        muon_params = [p for name, p in self.named_parameters() if p.ndim == 2 and 'wte' not in name]
+        adamw_decay_params = [p for name, p in self.named_parameters() if p.ndim < 2 and 'wte' not in name and p.requires_grad]
+        adamw_nodecay_params = [p for name, p in self.named_parameters() if 'wte' in name and p.requires_grad]
         
         adamw_groups = [
             {"params": adamw_decay_params, "weight_decay": 0.1},

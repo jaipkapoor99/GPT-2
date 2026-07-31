@@ -74,19 +74,16 @@ def get_dataloaders(config: UltronConfig, accelerator):
     full_ds = ZeroCopyShardedDataset(bin_shards, sequence_length=config.T, step=256)
     accelerator.print(f"Total Sequences Available: {len(full_ds):,}")
     
-    n_train = int(0.8 * len(full_ds))
-    n_dev   = int(0.1 * len(full_ds))
-    n_test  = len(full_ds) - n_train - n_dev
+    n_train = int(0.95 * len(full_ds))
+    n_dev   = len(full_ds) - n_train
     
-    train_ds, dev_ds, test_ds = torch.utils.data.random_split(full_ds, [n_train, n_dev, n_test])
+    train_ds, dev_ds = torch.utils.data.random_split(full_ds, [n_train, n_dev])
     
     train_loader = DataLoader(train_ds, batch_size=config.B, shuffle=True, num_workers=2, pin_memory=False)
     dev_loader   = DataLoader(dev_ds, batch_size=config.B, shuffle=False, num_workers=2, pin_memory=False)
-    test_loader  = DataLoader(test_ds, batch_size=config.B, shuffle=False, num_workers=2, pin_memory=False)
 
-    
-    train_loader, dev_loader, test_loader = accelerator.prepare(
-        train_loader, dev_loader, test_loader
+    train_loader, dev_loader = accelerator.prepare(
+        train_loader, dev_loader
     )
     
-    return train_loader, dev_loader, test_loader
+    return train_loader, dev_loader

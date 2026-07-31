@@ -30,7 +30,7 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 | :--- | :--- | :--- |
 | **Model Parameters** | 114,053,376 (114M) | GQA + Bias-Free SOTA 124M scale |
 | **Layers / Query Heads / KV Heads** | 12 layers / 12 Q-heads / 4 KV-heads | GQA Transformer layout ($C=768, n_{head}=12, n_{kv\_head}=4$) |
-| **Positional Embedding** | RoPE (Rotary) | Dynamic frequency base ($10,000$); learned absolute `wpe` embeddings present but superseded by RoPE |
+| **Positional Embedding** | RoPE (Rotary) | Dynamic frequency base ($10,000$) rotary embeddings |
 | **QK Normalization** | RMSNorm | Query/Key head normalization |
 | **Logit Soft-Cap** | 15.0 | Gemma 2 style `tanh` soft-capping |
 | **FFN Activation** | SwiGLU | Multiples of 64 Tensor-Core aligned |
@@ -42,6 +42,9 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 | **Precision** | BFloat16 (`bf16`) | Native mixed precision |
 | **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
 | **Optimizer** | Muon + AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
+| **Throughput** | ~183,500 tok/sec (~2.80 step/sec) | Benchmarked on single NVIDIA RTX 5090 GPU |
+| **GPU VRAM Allocation** | ~16.2 GB / 32 GB | Measured via `nvidia-smi` during active training |
+| **Estimated Pre-training Time** | ~15.1 Hours (15h 10m) | 10.0 Billion Tokens / 152,587 total steps |
 
 ---
 
@@ -54,7 +57,7 @@ ultron/
 ├── dataset.py              # Zero-Copy Memmap Sharded Dataset Loader
 ├── train.py                # Main Distributed Accelerated Training Script
 ├── trainer.py              # Trainer Class with Keller Jordan Muon + AdamW
-├── generate.py             # Text generation from local Accelerate checkpoint
+├── telemetry.py            # Telemetry & Experiment Tracking Manager (W&B + ETA + Checkpoint state)
 ├── requirements.txt        # Dependencies
 ├── loss_curve.svg          # Vector SVG pre-training loss trajectory plot
 ├── accelerate_checkpoint/  # Saved Accelerate model weights, optimizer state & RNG seeds
@@ -64,7 +67,9 @@ ultron/
 ├── tests/                  # Unit & Integration Tests (Accelerate + torch.testing)
 │   └── test_model.py       # Core model architecture & generation unit tests
 └── scripts/                # Helper Scripts
-    └── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
+    ├── generate.py         # Text generation from local Accelerate checkpoint
+    ├── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
+    └── upload_checkpoint.py# Hugging Face Hub checkpoint uploader script
 ```
 
 ---
@@ -311,18 +316,22 @@ accelerate launch generate.py --prompt "..." --temperature 0.85 --top-k 50 --max
 Building and pre-training Ultron from scratch provided key technical and operational insights, along with several real-world engineering hurdles overcome during development:
 
 ### 1. ⚙️ Accelerate Setup & Launcher Protocols
+
 - **Strict Launcher Enforcement**: Early in development, invoking scripts directly with `python3` resulted in `RuntimeError` failures due to uninitialized process groups and device mismatches. Establishing `accelerate launch` as the mandatory, uniform entry point across `train.py`, `generate.py`, and `tests/test_model.py` resolved device allocation and distributed coordination issues.
 - **DeepSpeed Compatibility vs. Custom Optimizers**: Encountered `MissingCUDAException` and batch size validation errors when testing DeepSpeed configurations. Because Ultron uses a custom dual-optimizer architecture (**Muon** for 2D weight matrices + **AdamW** for 1D parameters), DeepSpeed's unified optimizer engine conflicted with Muon's parameter update logic. Disabling DeepSpeed in `accelerate config` while retaining PyTorch's native `bf16` + `torch.compile` provided superior stability and peak throughput without configuration friction.
 
 ### 2. 🐍 Virtual Environment (`venv`) & C-Extension Dependency Management
+
 - **Python Version & C-Header Bottlenecks (`Python.h`)**: Moving from global Python to isolated virtual environments introduced Triton compilation errors (`Python.h: No such file or directory`) during `torch.compile()` execution on Python 3.14. Because Linux distribution Python packages split C headers into separate `-dev` packages, switching the virtual environment to **Python 3.13 via `uv`** provided standalone C-headers natively, eliminating compiler breakage without requiring system-level `sudo` interventions.
 - **Namespace Collision with Single-Cell `muon`**: Installing `muon` via standard `pip` initially pulled down an unrelated single-cell bioinformatics library of the same name instead of Keller Jordan's neural network optimizer. Resolved by explicitly installing `muon-optimizer` / direct module imports.
 
 ### 3. 💾 Checkpointing & State Preservation
+
 - **Stateful Resumption**: Ensuring zero loss of momentum states during multi-hour pre-training required setting up Accelerate's stateful directory serialization (`accelerate_checkpoint/`).
 - **Test Mode Isolation**: To prevent quick debugging runs (`--mode=test`) from accidentally overwriting production checkpoint files, custom logic was introduced to bypass disk state saving during test iterations.
 
 ### 4. 📈 Telemetry, Experiment Tracking & Logging
+
 - **W&B Integration**: Learned foundational Weights & Biases step logging, metric definition (`wandb.define_metric`), and live dashboard monitoring (`ultron-pretraining`).
 - **CSV Data Recovery**: Programmatic API retrieval required fallback handling, necessitating manual CSV log exports (`wandb_export_*.csv`) to reconstruct high-resolution loss curves when local runs were interrupted.
 

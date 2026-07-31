@@ -10,3 +10,4 @@ rich>=15.0.0
 muon
 lm-eval>=0.4.0
 pytest>=9.0.0
+huggingface_hub>=0.25.0

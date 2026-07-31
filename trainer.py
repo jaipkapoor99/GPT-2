@@ -4,6 +4,7 @@ import shutil
 import torch
 import time
 from accelerate import Accelerator
+from telemetry import UltronTelemetry
 
 
 class UltronTrainer:
@@ -20,18 +21,13 @@ class UltronTrainer:
         self.step = 0
         self.decay_start_step = int(0.8 * config.max_steps)
         self.tokens_per_step = (config.B * accelerator.gradient_accumulation_steps) * config.T
+        self.telemetry = UltronTelemetry(config, accelerator, checkpoint_dir=self.accelerate_dir)
 
-        # Tell wandb to track dev_loss in the run summary (min value)
-        if accelerator.is_main_process:
-            try:
-                import wandb
-                wandb.define_metric("dev_loss", summary="min")
-                wandb.define_metric("train_loss", summary="last")
-            except Exception:
-                pass
-
-    def print_rich(self, text: str):
-        pass
+    def print_rich(self, msg: str):
+        if hasattr(self, "telemetry") and self.telemetry is not None:
+            self.telemetry.print_message(msg)
+        else:
+            self.accelerator.print(msg)
 
     def print_table_header(self):
         pass
@@ -90,14 +86,8 @@ class UltronTrainer:
         avg_dev_loss = total_dev_loss / dev_batches
 
         self.print_table_row(self.step, train_loss, avg_dev_loss, lr)
-        # Log train_loss and dev_loss together at the same step so wandb
-        # plots them on the same x-axis and dev_loss appears in the summary.
-        self.accelerator.log({
-            "train_loss": train_loss,
-            "dev_loss": avg_dev_loss,
-            "lr": lr,
-            "eta_seconds": eta_seconds,
-        }, step=self.step)
+        # Log train_loss and dev_loss together at the same step
+        self.telemetry.log_evaluation(self.step, train_loss, avg_dev_loss, lr, eta_seconds=eta_seconds)
         self.save_checkpoint()
         self.model.train()
 
@@ -106,9 +96,14 @@ class UltronTrainer:
             return
         # Save only the Accelerate training state (model weights, optimizer, etc.)
         self.accelerator.save_state(self.accelerate_dir)
-        # Persist the current step so we can resume correctly
+        # Persist the current step and wandb run ID so we can resume correctly
+        state_payload = {"step": self.step, "max_steps": self.config.max_steps}
+        run_id = self.telemetry.get_wandb_run_id()
+        if run_id:
+            state_payload["wandb_run_id"] = run_id
+
         with open(os.path.join(self.accelerate_dir, "training_state.json"), "w") as f:
-            json.dump({"step": self.step, "max_steps": self.config.max_steps}, f, indent=2)
+            json.dump(state_payload, f, indent=2)
         if final:
             self.print_rich("✓ Saved Accelerate checkpoint.")
 
@@ -152,40 +147,22 @@ class UltronTrainer:
                     if self.optimizer_muon is not None:
                         self.optimizer_muon.zero_grad()
                     
-                    # Initialize timing on first sync iteration
-                    if not hasattr(self, "start_time"):
-                        self.start_time = time.time()
-                        self.session_steps = 0
                     if self.accelerator.sync_gradients:
                         self.step += 1
-                        self.session_steps += 1
-                        # Compute progress percentage and ETA based on current-session speed
-                        total_steps = self.config.max_steps
-                        perc = (self.step / total_steps) * 100
-                        elapsed = time.time() - self.start_time
-                        remaining_steps = total_steps - self.step
-                        eta = (elapsed / self.session_steps) * remaining_steps if self.session_steps else 0
-
-                        # Format ETA as hours, minutes, seconds remaining
-                        eta_h = int(eta) // 3600
-                        eta_m = (int(eta) % 3600) // 60
-                        eta_s = int(eta) % 60
-                        eta_str = f"{eta_h}h {eta_m}m {eta_s}s" if eta_h > 0 else f"{eta_m}m {eta_s}s"
-                        prog_msg = f"[{int(perc)}%] ETA: {eta_str} | Step: {self.step}/{total_steps}"
-                        if self.accelerator.is_main_process:
-                            term_width = shutil.get_terminal_size(fallback=(120, 24)).columns
-                            print(prog_msg.ljust(term_width), end='\r', flush=True)
+                        eta_seconds = self.telemetry.update_terminal_progress(self.step, loss=loss.item())
                         is_eval_step = (self.step % self.config.eval_interval == 0 or self.step == self.config.max_steps)
                         if not is_eval_step:
                             # Non-eval steps: log train metrics only
-                            self.accelerator.log({
-                                "train_loss": loss.item(),
-                                "lr": lr,
-                                "progress_percent": perc,
-                                "eta_seconds": int(eta),
-                            }, step=self.step)
+                            self.telemetry.log_training_step(
+                                step=self.step,
+                                loss=loss.item(),
+                                lr=lr,
+                                progress_percent=(self.step / self.config.max_steps) * 100,
+                                eta_seconds=eta_seconds
+                            )
                         if is_eval_step:
-                            self.evaluate(loss.item(), lr, eta_seconds=int(eta))
+                            self.evaluate(loss.item(), lr, eta_seconds=eta_seconds)
         
+        self.telemetry.close()
         self.print_rich("\n[bold green]🎉 Pre-training Complete![/bold green]")
         self.save_checkpoint(final=True)

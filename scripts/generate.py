@@ -11,6 +11,9 @@ import os
 import json
 import torch
 from transformers import AutoTokenizer
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from accelerate import Accelerator
 from config import UltronConfig
 from model import UltronModel
