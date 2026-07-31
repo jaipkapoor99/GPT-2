@@ -45,7 +45,7 @@ class UltronTelemetry:
                 with open(state_file, "r") as f:
                     state_data = json.load(f)
                     if "wandb_run_id" in state_data:
-                        wandb_init_kwargs["wandb"].update({"id": state_data["wandb_run_id"], "resume": "must"})
+                        wandb_init_kwargs["wandb"].update({"id": state_data["wandb_run_id"], "resume": "allow"})
             except Exception:
                 pass
 
