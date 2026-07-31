@@ -76,7 +76,11 @@ ultron/
 ```bash
 git clone https://github.com/jaipkapoor99/ultron.git
 cd ultron
-pip install -r requirements.txt
+
+# Fast environment setup using uv
+uv venv --python 3.13 venv
+source venv/bin/activate
+uv pip install -r requirements.txt nvidia-cuda-nvcc
 ```
 
 ### 2. Tokenize Dataset
