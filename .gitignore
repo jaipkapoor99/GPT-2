@@ -16,6 +16,7 @@ gpt2-sota-instruct/
 # Training Logs & Outputs
 logs/
 wandb/
+*.csv
 
 # Archives
 archives/

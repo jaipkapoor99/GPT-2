@@ -22,9 +22,6 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 - **Warmup-Stable-Decay (WSD) Schedule:** WSD learning rate schedule (80% stable phase, 20% cosine decay).
 - **Zero-Copy Data Loader:** Memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead during multi-billion token streaming.
 
-> [!NOTE]
-> **Hugging Face Pipeline (Parked / Under Development):** Hugging Face Hub integration, `pipeline("text-generation")` wrappers (`UltronForCausalLM`), and HF export scripts (`export_to_hf.py`, `generate_from_hf.py`) are parked and under active development. Core development focus is centered on native local pre-training, benchmarking.
-
 ---
 
 ## 📊 Pre-training Architecture & Hyperparameters
@@ -52,22 +49,22 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 
 ```text
 ultron/
-├── model.py              # PyTorch Ultron (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
-├── config.py             # Model & Hyperparameter Configuration Dataclass
-├── hf_model.py           # Hugging Face Wrapper (UltronHFConfig + UltronForCausalLM)
-├── model_card.yaml       # HF Model Card Metadata Specification
-├── dataset.py            # Zero-Copy Memmap Sharded Dataset Loader
-├── train.py              # Main Distributed Accelerated Training Script
-├── trainer.py            # Trainer Class with Keller Jordan Muon + AdamW
-├── generate.py           # Text generation from local Accelerate checkpoint
-├── requirements.txt      # Dependencies
-├── README.md             # Project Overview & Architecture Guide
-├── tests/                # Unit & Integration Tests (Accelerate + torch.testing)
-│   ├── test_model.py
-│   └── test_hf_wrapper.py
-└── scripts/              # Helper Scripts
-    ├── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
-    └── export_to_hf.py     # Local export & Hugging Face Hub upload pipeline
+├── model.py                # PyTorch Ultron (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
+├── config.py               # Model & Hyperparameter Configuration Dataclass
+├── dataset.py              # Zero-Copy Memmap Sharded Dataset Loader
+├── train.py                # Main Distributed Accelerated Training Script
+├── trainer.py              # Trainer Class with Keller Jordan Muon + AdamW
+├── generate.py             # Text generation from local Accelerate checkpoint
+├── requirements.txt        # Dependencies
+├── loss_curve.svg          # Vector SVG pre-training loss trajectory plot
+├── accelerate_checkpoint/  # Saved Accelerate model weights, optimizer state & RNG seeds
+├── shards_edu/             # Binary FineWeb-Edu tokenized data shards (.bin)
+├── wandb/                  # Local step telemetry logs & experiment tracking runs
+├── .agents/                # Project AGENTS.md rules & workspace customization
+├── tests/                  # Unit & Integration Tests (Accelerate + torch.testing)
+│   └── test_model.py       # Core model architecture & generation unit tests
+└── scripts/                # Helper Scripts
+    └── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
 ```
 
 ---
@@ -148,14 +145,6 @@ accelerate launch train.py --mode=test
 - **Token Throughput**: `~183,000+ tokens/sec` (65,536 tokens / step)
 - **Full Pre-training Time (10B Tokens / 152.5k steps)**: **~15 hours total** on an RTX 5090 GPU!
 
-#### 🖥️ Training Progress Display
-
-During training a single-line progress counter is printed to the terminal and continuously overwritten (no clutter):
-
-```text
-[12%] ETA: 2h 45m 30s | Step: 18312/152587
-```
-
 - **Percentage** — rounded integer progress over the full run.
 - **ETA** — time remaining (`h m s`), computed from the throughput of the **current session only**, so it stays accurate after a resumed checkpoint.
 - **Step counter** — `current / total` steps.
@@ -171,17 +160,47 @@ accelerate launch train.py --mode=continue
 > [!NOTE]
 > Test runs (`--mode=test`) never write checkpoints, keeping production resume states unpolluted.
 
-#### 📈 Experiment Tracking (W&B)
+#### 📈 Experiment Tracking & Pre-training Telemetry Summary
 
-All runs are tracked with **Weights & Biases** under the `ultron-pretraining` project. The following metrics are logged at every step:
+Pre-training metrics are logged via **Weights & Biases** under the `ultron-pretraining` project.
 
-| Metric | Description |
-| :--- | :--- |
-| `train_loss` | Training cross-entropy loss (every step) |
-| `dev_loss` | Validation cross-entropy loss (every `eval_interval` steps, co-plotted with `train_loss`) |
-| `lr` | Current learning rate |
-| `eta_seconds` | Estimated time remaining (seconds), session-scoped |
-| `progress_percent` | Integer percentage of total run |
+##### 📊 Pre-training Run Telemetry & Performance Statistics
+
+| Metric | Recorded Value | Description |
+| :--- | :--- | :--- |
+| **Total Steps Completed** | **152,587 / 152,587 (100%)** | Full pre-training run on FineWeb-Edu |
+| **Total Tokens Processed** | **~10.0 Billion Tokens** | 65,536 tokens per step (batch size 64 $\times$ seq len 1,024) |
+| **Step Throughput** | **~2.80 iterations/sec** | 2.79–2.82 it/s continuous speed |
+| **Token Throughput** | **~183,400 tokens/sec** | SOTA Muon + PyTorch 2.0 compile throughput |
+| **Compute Hardware** | **NVIDIA RTX 5090 (32GB)** | Native BFloat16 (`bf16`) mixed precision |
+| **Total Wall-Clock Time** | **~15.0 Hours Total** | Completed full 10B token pre-training |
+| **Final Validation (`dev_loss`)** | **2.9179** | Evaluated on validation set at step 152,587 |
+| **Final Train Loss (`train_loss`)** | **~2.85** | 100-step moving average at step 152,587 |
+| **Exported CSV Log Files** | **`wandb_export_*.csv`** | Step-by-step telemetry logs for steps 143,251–152,587 |
+
+##### 📉 Sampled Loss Progression Checkpoints (WSD Cosine Decay Phase)
+
+| Training Step | Validation Loss (`dev_loss`) | Step Train Loss (`train_loss`) |
+| :--- | :--- | :--- |
+| **Step 143,500** | `2.9476` | `2.9528` |
+| **Step 145,500** | `2.9415` | `3.0203` |
+| **Step 147,500** | `2.9354` | `3.0872` |
+| **Step 149,500** | `2.9279` | `2.8706` |
+| **Step 151,500** | `2.9217` | `3.1029` |
+| **Step 152,500** | `2.9179` | `2.8702` |
+| **Step 152,587 (100% Final)** | **`2.9179`** | **`2.8530`** |
+
+##### 📉 Pre-training Loss Trajectory (High-Contrast Detailed Curve)
+
+![Ultron Pre-training Loss Curve](loss_curve.svg)
+
+> [!IMPORTANT]
+> **Loss Trajectory & Overfitting Analysis:**
+> Towards the final WSD cosine decay phase (steps 150,000–152,587), the moving average `train_loss` (~2.85) dropped slightly below the validation `dev_loss` (2.9179). This slight divergence indicates the onset of mild capacity saturation / slight overfitting on the pre-training dataset. If pre-training had been extended beyond 152,587 steps without tuning regularization hyperparameters (e.g., increasing weight decay or introducing dropout/data filtering), validation performance (`dev_loss`) would have begun to plateau and eventually degrade.
+
+> [!WARNING]
+> **Telemetry Log Fragmentation Notice:**
+> Due to repeated local crashes, hardware reboots, and multiple run renamings during early hyperparameter exploration, portions of the early step-level Weights & Biases telemetry logs for `ultron-pretraining` were lost or fragmented across local run directories (`wandb/`). The model weights, final telemetry logs (`wandb_export_*.csv`), pre-training step count (152,587 / 152,587), and final state remain 100% intact and verified.
 
 - `dev_loss` and `train_loss` are logged at the **same step** at eval intervals so they appear on a **single shared chart** in W&B.
 - `dev_loss` is registered as a **summary metric (min)**, so the best validation loss is always visible on the run card.
@@ -253,7 +272,19 @@ accelerate launch generate.py --prompt "..." --temperature 0.85 --top-k 50 --max
 ---
 
 > [!NOTE]
-> These samples represent the final **100% pre-training completion snapshot** at step **152,587** (~10B tokens). Noticeably improved topical consistency, sentence structure, and domain terminology compared to mid-training checkpoints.
+> **Benchmarking & Pre-training Completion Notice:**
+>
+> 1. **Completion Snapshot**: The text generation samples above represent the final **100% pre-training completion snapshot** at step **152,587** (~10B tokens).
+> 2. **Future Evaluation Plan**: Formal zero-shot benchmark evaluation across standard benchmark suites (`HellaSwag`, `MMLU`, `GSM8K`, `HumanEval`, etc.) is deferred to the upcoming Supervised Fine-Tuning (SFT) / instruction-tuning phase, as evaluating raw pre-trained base models directly on task prompts does not accurately reflect model capability prior to instruction alignment.
+
+---
+
+## 🎓 Learning Experiences
+
+Building and pre-training Ultron from scratch provided key technical and operational insights:
+
+- **Transitioning from WSL to Native Ubuntu 24.04 LTS**: Shifting from Windows Subsystem for Linux (WSL) to native Ubuntu 24.04 LTS eliminated GPU driver virtualization overhead, resolved CUDA memory allocation bottlenecks, and drastically improved PyTorch `torch.compile` Triton graph compilation stability on RTX 50-series hardware.
+- **Experiment Tracking with Weights & Biases (W&B)**: Learned foundational W&B step logging and metric tracking, though full programmatic API automation remains a work in progress (requiring manual CSV log exports for final trajectory plotting rather than automated API data fetching).
 
 ---
 
