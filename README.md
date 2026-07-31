@@ -197,7 +197,6 @@ Pre-training metrics are logged via **Weights & Biases** under the `ultron-pretr
 > [!IMPORTANT]
 > **Loss Trajectory & Overfitting Analysis:**
 > Towards the final WSD cosine decay phase (steps 150,000–152,587), the moving average `train_loss` (~2.85) dropped slightly below the validation `dev_loss` (2.9179). This slight divergence indicates the onset of mild capacity saturation / slight overfitting on the pre-training dataset. If pre-training had been extended beyond 152,587 steps without tuning regularization hyperparameters (e.g., increasing weight decay or introducing dropout/data filtering), validation performance (`dev_loss`) would have begun to plateau and eventually degrade.
-
 > [!WARNING]
 > **Telemetry Log Fragmentation Notice:**
 > Due to repeated local crashes, hardware reboots, and multiple run renamings during early hyperparameter exploration, portions of the early step-level Weights & Biases telemetry logs for `ultron-pretraining` were lost or fragmented across local run directories (`wandb/`). The model weights, final telemetry logs (`wandb_export_*.csv`), pre-training step count (152,587 / 152,587), and final state remain 100% intact and verified.
