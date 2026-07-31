@@ -20,7 +20,9 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 - **Logit Soft-Capping:** Gemma 2 standard logit soft-capping (`cap=15.0`) applied via `tanh` to prevent overconfidence.
 - **RMSNorm & Bias-Free Layers:** Root Mean Square Layer Normalization (RMSNorm) and bias-free linear projections across all layers (`bias=False`).
 - **Warmup-Stable-Decay (WSD) Schedule:** WSD learning rate schedule (80% stable phase, 20% cosine decay).
-- **Zero-Copy Data Loader:** Memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead during multi-billion token streaming.
+- **High-Throughput Rust-Engine Batch Tokenization:** Sub-process tokenization utilizing Rust `backend_tokenizer.encode_batch` with `num_threads=1` inside multi-process worker pools. Streams FineWeb-Edu at **~4.34 Million tokens/sec** into compact `uint16` binary shards with zero-padding overhead and explicit `<|endoftext|>` document boundaries.
+- **Zero-Copy Memory-Mapped Data Pipeline:** Memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead during multi-billion token streaming. Pre-tokenized binary shards are mapped directly into virtual memory, allowing 100% dataset sequence coverage without RAM bloat.
+- **Decoupled Telemetry & Clean Signal Hygiene:** Dedicated `telemetry.py` module handling live `tqdm` terminal progress meters, step throughput meters (`tok/s`), stateful W&B run resumption (`name="master"`), and clean `SIGINT` handling (`os._exit(0)`) to terminate background threads without socket tracebacks.
 
 ---
 
@@ -69,8 +71,16 @@ ultron/
 └── scripts/                # Helper Scripts
     ├── generate.py         # Text generation from local Accelerate checkpoint
     ├── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
-    └── upload_checkpoint.py# Hugging Face Hub checkpoint uploader script
+    ├── upload_checkpoint.py# Hugging Face Hub model checkpoint uploader script
+    └── upload_dataset_shards.py # Hugging Face Hub dataset shards uploader script
 ```
+
+---
+
+## 🤗 Hugging Face Repositories
+
+- **Model Repository**: [`jaipkapoor99/ultron-124m`](https://huggingface.co/jaipkapoor99/ultron-124m)
+- **Dataset Shards Repository**: [`jaipkapoor99/ultron-fineweb-edu-shards`](https://huggingface.co/datasets/jaipkapoor99/ultron-fineweb-edu-shards)
 
 ---
 
@@ -330,9 +340,15 @@ Building and pre-training Ultron from scratch provided key technical and operati
 - **Stateful Resumption**: Ensuring zero loss of momentum states during multi-hour pre-training required setting up Accelerate's stateful directory serialization (`accelerate_checkpoint/`).
 - **Test Mode Isolation**: To prevent quick debugging runs (`--mode=test`) from accidentally overwriting production checkpoint files, custom logic was introduced to bypass disk state saving during test iterations.
 
-### 4. 📈 Telemetry, Experiment Tracking & Logging
+### 4. 🚀 Data Pipeline & High-Throughput Batch Tokenization Optimizations
 
-- **W&B Integration**: Learned foundational Weights & Biases step logging, metric definition (`wandb.define_metric`), and live dashboard monitoring (`ultron-pretraining`).
+- **Rust Batch Encoding Bottleneck Elimination**: Python `for`-loop tokenization (`tokenizer.encode(text)`) choked on Hugging Face parquet streaming, bottlenecking data output to ~40,000 tokens/sec. By switching to Rust `backend_tokenizer.encode_batch` with explicit thread locking (`num_threads=1` inside worker subprocesses to prevent thread contention), tokenization speed surged by **>100x** to **~4.34 Million tokens/sec**!
+- **Zero-Copy Disk Slicing (`np.memmap`)**: Streaming 10.0 Billion tokens into RAM would cause system OOM crashes. Pre-tokenizing into contiguous 100M token `uint16` binary shards (`shards_edu/*.bin`) allows zero-copy disk mapping (`np.memmap(..., dtype=np.uint16, mode='r')`), achieving 100% dataset sequence coverage with <500MB host RAM usage.
+- **Signal Hygiene & Process Interruption**: Streaming background workers initially hung and dumped trailing socket error tracebacks upon `Ctrl+C`. Registering custom `signal.SIGINT` handlers in `scripts/tokenize_dataset.py` with `os._exit(0)` ensured instant, clean process termination.
+
+### 5. 📈 Telemetry, Experiment Tracking & Logging
+
+- **W&B Integration & Run Resumption**: Configured Weights & Biases step logging, metric namespaces (`train/*`, `eval/*`, `perf/*`), and explicit run resumption logic (`name="master"`, `resume="must"` via `training_state.json`) to prevent duplicate W&B dashboard fragmentation.
 - **CSV Data Recovery**: Programmatic API retrieval required fallback handling, necessitating manual CSV log exports (`wandb_export_*.csv`) to reconstruct high-resolution loss curves when local runs were interrupted.
 
 ---

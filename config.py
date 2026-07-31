@@ -26,7 +26,8 @@ class UltronConfig:
     rope_base: float = 10000.0  # RoPE frequency base parameter
     logit_softcap: float = 15.0 # Gemma 2 standard logit softcapping (prevents overconfidence)
     vocab_size: int = 49152      # SmolLM BPE Vocab size
-    hf_repo_id: str = "jaipkapoor99/ultron-124m" # Hugging Face Hub repository identifier
+    hf_repo_id: str = "jaipkapoor99/ultron-124m" # Hugging Face Hub model repository identifier
+    hf_dataset_repo_id: str = "jaipkapoor99/ultron-fineweb-edu-shards" # Hugging Face Hub dataset repository identifier
     head_dim: int = field(init=False)
 
     def __post_init__(self):
