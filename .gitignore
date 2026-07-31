@@ -2,7 +2,7 @@
 *.bin
 shards/
 shards_edu/
-.agents/
+
 # Model Weights & Checkpoints
 *.pth
 *.pt
