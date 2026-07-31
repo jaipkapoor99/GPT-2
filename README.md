@@ -107,9 +107,33 @@ accelerate config
 | Setting | Value | Why |
 | :--- | :--- | :--- |
 | Compute environment | Local machine | Single-node training |
-| Distributed type | No | Single GPU |
+| Distributed type | `NO` | Single GPU |
 | Mixed precision | `bf16` | Required for SOTA throughput on RTX 30xx/40xx/50xx |
-| TorchDynamo backend | `inductor` | Enables `torch.compile` graph compilation |
+| TorchDynamo backend | `INDUCTOR` | Enables `torch.compile` graph compilation |
+
+#### 📄 Active System Configuration (`~/.cache/huggingface/accelerate/default_config.yaml`)
+
+```yaml
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: 'NO'
+downcast_bf16: 'no'
+dynamo_config:
+  dynamo_backend: INDUCTOR
+enable_cpu_affinity: false
+gpu_ids: all
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 1
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
+```
 
 Once configured, **all three entry points** use this config automatically:
 
@@ -282,12 +306,25 @@ accelerate launch generate.py --prompt "..." --temperature 0.85 --top-k 50 --max
 
 ---
 
-## 🎓 Learning Experiences
+## 🎓 Learning Experiences & 🛠️ Trials and Tribulations
 
-Building and pre-training Ultron from scratch provided key technical and operational insights:
+Building and pre-training Ultron from scratch provided key technical and operational insights, along with several real-world engineering hurdles overcome during development:
 
-- **Transitioning from WSL to Native Ubuntu 24.04 LTS**: Shifting from Windows Subsystem for Linux (WSL) to native Ubuntu 24.04 LTS eliminated GPU driver virtualization overhead, resolved CUDA memory allocation bottlenecks, and drastically improved PyTorch `torch.compile` Triton graph compilation stability on RTX 50-series hardware.
-- **Experiment Tracking with Weights & Biases (W&B)**: Learned foundational W&B step logging and metric tracking, though full programmatic API automation remains a work in progress (requiring manual CSV log exports for final trajectory plotting rather than automated API data fetching).
+### 1. ⚙️ Accelerate Setup & Launcher Protocols
+- **Strict Launcher Enforcement**: Early in development, invoking scripts directly with `python3` resulted in `RuntimeError` failures due to uninitialized process groups and device mismatches. Establishing `accelerate launch` as the mandatory, uniform entry point across `train.py`, `generate.py`, and `tests/test_model.py` resolved device allocation and distributed coordination issues.
+- **DeepSpeed Compatibility vs. Custom Optimizers**: Encountered `MissingCUDAException` and batch size validation errors when testing DeepSpeed configurations. Because Ultron uses a custom dual-optimizer architecture (**Muon** for 2D weight matrices + **AdamW** for 1D parameters), DeepSpeed's unified optimizer engine conflicted with Muon's parameter update logic. Disabling DeepSpeed in `accelerate config` while retaining PyTorch's native `bf16` + `torch.compile` provided superior stability and peak throughput without configuration friction.
+
+### 2. 🐍 Virtual Environment (`venv`) & C-Extension Dependency Management
+- **Python Version & C-Header Bottlenecks (`Python.h`)**: Moving from global Python to isolated virtual environments introduced Triton compilation errors (`Python.h: No such file or directory`) during `torch.compile()` execution on Python 3.14. Because Linux distribution Python packages split C headers into separate `-dev` packages, switching the virtual environment to **Python 3.13 via `uv`** provided standalone C-headers natively, eliminating compiler breakage without requiring system-level `sudo` interventions.
+- **Namespace Collision with Single-Cell `muon`**: Installing `muon` via standard `pip` initially pulled down an unrelated single-cell bioinformatics library of the same name instead of Keller Jordan's neural network optimizer. Resolved by explicitly installing `muon-optimizer` / direct module imports.
+
+### 3. 💾 Checkpointing & State Preservation
+- **Stateful Resumption**: Ensuring zero loss of momentum states during multi-hour pre-training required setting up Accelerate's stateful directory serialization (`accelerate_checkpoint/`).
+- **Test Mode Isolation**: To prevent quick debugging runs (`--mode=test`) from accidentally overwriting production checkpoint files, custom logic was introduced to bypass disk state saving during test iterations.
+
+### 4. 📈 Telemetry, Experiment Tracking & Logging
+- **W&B Integration**: Learned foundational Weights & Biases step logging, metric definition (`wandb.define_metric`), and live dashboard monitoring (`ultron-pretraining`).
+- **CSV Data Recovery**: Programmatic API retrieval required fallback handling, necessitating manual CSV log exports (`wandb_export_*.csv`) to reconstruct high-resolution loss curves when local runs were interrupted.
 
 ---
 
