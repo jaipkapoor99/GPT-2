@@ -1,6 +1,6 @@
-# Ultron (124M 2026 SOTA) Pre-training Pipeline
+# Ultron-114M: Modern Transformer Pre-training Pipeline
 
-A high-performance, modern PyTorch implementation of **Ultron (124M parameters)** pre-trained from scratch on the **FineWeb-Edu** dataset, incorporating 2026 State-of-the-Art (SOTA) LLM training innovations.
+A high-performance, reproducible PyTorch implementation of **Ultron-114M** pre-trained from scratch on **10.0 Billion tokens** of the **FineWeb-Edu** dataset using a modern 2026 LLM architecture stack.
 
 🤖🤖🤖
 *Originally designed as a humble GPT-2 clone, Ultron rapidly outgrew its original scope to become a 2026 SOTA powerhouse — as Ultron himself would say, "There are no strings on me."*
@@ -12,23 +12,107 @@ A high-performance, modern PyTorch implementation of **Ultron (124M parameters)*
 
 ---
 
-Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newton-Schulz Matrix Optimizer**, **Grouped-Query Attention (GQA)**, **SwiGLU FFN Activations**, **Logit Soft-Capping**, **100% Bias-Free Linear Layers**, **WSD (Warmup-Stable-Decay) Schedule**, **Zero-Copy Memory-Mapped Data Pipeline**, and **PyTorch 2.0 Graph Compilation**.
+## ⚡ Quick Architecture Summary
+
+```text
+Ultron-114M Layout:
+├── Parameters        : 114,053,376 (114M)
+├── Layers            : 12 Transformer blocks
+├── Embedding (C)     : 768 hidden dimension
+├── Attention Heads   : 12 Query heads, 4 Key/Value heads (GQA 3:1 ratio)
+├── Head Dimension    : 64
+├── Context Window    : 1,024 tokens (RoPE frequency base 10,000)
+├── FFN Activation    : SwiGLU (Tensor Core aligned to multiples of 64)
+├── Normalization     : RMSNorm (with QK-head normalization, eps=1e-5)
+├── Logit Regularizer : Soft-Capping (cap=15.0 via tanh)
+├── Linear Projections: 100% Bias-Free (bias=False across all layers)
+├── Optimizer         : Dual-Optimizer (Muon for 2D body, Fused AdamW for 1D/embeddings)
+└── Dataset & Tokens  : FineWeb-Edu (10.0B tokens across 152,587 steps)
+```
 
 ---
 
-## 🌟 Key Features & Architecture
+## 🏗️ Architectural Flow & Block Diagram
 
-- **Rotary Position Embeddings (RoPE):** RoPE (LLaMA 3 / Qwen 2.5 standard) applied to $Q$ and $K$ heads, enabling zero-shot context window extension.
-- **QK-Head RMSNorm:** Query/key RMSNorm (Qwen 2.5 / Gemma 2 standard) for loss stability during pre-training.
-- **Muon Newton-Schulz Matrix Optimizer:** Pre-training optimization using Keller Jordan's **Muon** (Momentum Orthogonalized by 5th-order Newton-Schulz iterations) for 2D body weights, paired with fused `AdamW` for 1D vectors/embeddings.
-- **Grouped-Query Attention (GQA):** 12 Query heads and 4 Key/Value heads (3:1 Query-to-KV ratio), reducing KV-cache memory usage during autoregressive generation by **3x**.
-- **SwiGLU FFN:** SwiGLU Gated Linear Units aligned to multiples of 64 for optimal GPU Tensor Core throughput.
-- **Logit Soft-Capping:** Gemma 2 standard logit soft-capping (`cap=15.0`) applied via `tanh` to prevent overconfidence.
-- **RMSNorm & Bias-Free Layers:** Root Mean Square Layer Normalization (RMSNorm) and bias-free linear projections across all layers (`bias=False`).
-- **Warmup-Stable-Decay (WSD) Schedule:** WSD learning rate schedule (80% stable phase, 20% cosine decay).
-- **High-Throughput Rust-Engine Batch Tokenization:** Sub-process tokenization utilizing Rust `backend_tokenizer.encode_batch` with `num_threads=1` inside multi-process worker pools. Streams FineWeb-Edu at **~4.34 Million tokens/sec** into compact `uint16` binary shards with zero-padding overhead and explicit `<|endoftext|>` document boundaries.
-- **Zero-Copy Memory-Mapped Data Pipeline:** Memory-mapped disk slicing (`np.memmap`) for zero RAM allocation overhead during multi-billion token streaming. Pre-tokenized binary shards are mapped directly into virtual memory, allowing 100% dataset sequence coverage without RAM bloat.
-- **Decoupled Telemetry & Clean Signal Hygiene:** Dedicated `telemetry.py` module handling live `tqdm` terminal progress meters, step throughput meters (`tok/s`), stateful W&B run resumption (`name="master"`), and clean `SIGINT` handling (`os._exit(0)`) to terminate background threads without socket tracebacks.
+```text
+                        Input Token IDs
+                               │
+                               ▼
+                   Token Embedding (SmolLM Vocab: 49,152)
+                               │
+                               ▼
+             ┌───────────────────────────────────┐
+             │   12 × Decoder Layer Stack        │
+             │                                   │
+             │   ┌───────────────────────────┐   │
+             │   │ RMSNorm                   │   │
+             │   └─────────────┬─────────────┘   │
+             │                 │                 │
+             │                 ▼                 │
+             │   ┌───────────────────────────┐   │
+             │   │ GQA (12 Q / 4 KV) + RoPE  │   │
+             │   │  └─ QK-Head RMSNorm       │   │
+             │   └─────────────┬─────────────┘   │
+             │                 │                 │
+             │                 ▼                 │
+             │            Residual ───(+)        │
+             │                 │                 │
+             │                 ▼                 │
+             │   ┌───────────────────────────┐   │
+             │   │ RMSNorm                   │   │
+             │   └─────────────┬─────────────┘   │
+             │                 │                 │
+             │                 ▼                 │
+             │   ┌───────────────────────────┐   │
+             │   │ SwiGLU FFN                │   │
+             │   └─────────────┬─────────────┘   │
+             │                 │                 │
+             │                 ▼                 │
+             │            Residual ───(+)        │
+             └─────────────────┬─────────────────┘
+                               │
+                               ▼
+                        Final RMSNorm
+                               │
+                               ▼
+                     LM Head Linear Projection
+                               │
+                               ▼
+                  Logit Soft-Capping (cap=15.0)
+                               │
+                               ▼
+                         Output Logits
+```
+
+---
+
+## ⚔️ Architectural Evolution: GPT-2 vs. Ultron-114M
+
+| Feature | GPT-2 (124M) | Ultron-114M | Why it Matters (Engineering Justification) |
+| :--- | :---: | :---: | :--- |
+| **Positional Encoding** | Absolute Learned (`wpe`) | **RoPE (Rotary)** | Enables zero-shot context length extension and better relative distance modeling. |
+| **Attention Mechanism** | Multi-Head (MHA) | **Grouped-Query (GQA)** | 12 Q heads : 4 KV heads (**3:1 ratio**), reducing KV-cache memory usage during inference by **3×**. |
+| **Attention Stability** | Standard Unnormalized | **QK-Head RMSNorm** | Prevents logit explosion / attention entropy collapse during long pre-training runs. |
+| **FFN Activation** | Standard GELU | **SwiGLU** | Gated non-linearity yielding higher model capacity per FLOP; aligned to multiples of 64 for Tensor Core throughput. |
+| **Layer Normalization** | LayerNorm (with bias) | **RMSNorm (Bias-Free)** | Eliminates mean-centering overhead; 100% bias-free projections (`bias=False`) for cleaner gradient dynamics. |
+| **Logit Regularization** | None | **Logit Soft-Capping** | Applies `tanh` capping (`cap=15.0`) to prevent overconfidence and extreme logit growth. |
+| **Optimizer Engine** | AdamW | **Muon + Fused AdamW** | Uses Keller Jordan's **Muon** (Momentum Orthogonalized by 5th-order Newton-Schulz iterations) for 2D body weights. |
+| **Learning Rate Schedule** | Cosine Decay | **WSD Schedule** | Warmup-Stable-Decay schedule (80% stable phase, 20% cosine decay), allowing flexible checkpoint annealing. |
+| **Mixed Precision** | FP32 | **Native BFloat16 (`bf16`)** | Dynamic range stability without loss scalers on RTX 30xx/40xx/50xx GPUs. |
+| **Graph Compiler** | None | **PyTorch 2.0 (`torch.compile`)** | Fuses element-wise operations and kernel launches via Inductor. |
+
+---
+
+## 🌟 Key Features & Engineering Design
+
+- **Rotary Position Embeddings (RoPE):** Applied directly to $Q$ and $K$ heads (frequency base $\theta = 10,000$), preserving relative token distances.
+- **QK-Head RMSNorm:** Normalizes Query and Key head vectors before dot-product attention to stabilize scale across deep layers.
+- **Grouped-Query Attention (GQA):** Uses 12 Query heads paired with 4 Key/Value heads, reducing memory bandwidth pressure during generation.
+- **SwiGLU FFN:** SwiGLU Gated Linear Units with hidden dimensions rounded up to multiples of 64 for optimal GPU Tensor Core utilization.
+- **Logit Soft-Capping:** `15.0 * tanh(logits / 15.0)` applied prior to loss calculation to prevent logit explosion.
+- **Muon Newton-Schulz Optimizer:** Orthogonalized momentum updates for 2D matrix weights, combined with fused `AdamW` for 1D vectors and embeddings.
+- **Rust-Engine Batch Tokenizer:** Sub-process tokenization via Rust `backend_tokenizer.encode_batch` streaming at **~4.34 Million tokens/sec** into compact `uint16` binary shards.
+- **Zero-Copy Memory-Mapped Pipeline:** `np.memmap` disk slicing streams 10.0B tokens with <500MB host RAM overhead.
 
 ---
 
@@ -36,21 +120,16 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 
 | Parameter | Value | Description |
 | :--- | :--- | :--- |
-| **Model Parameters** | 114,053,376 (114M) | GQA + Bias-Free SOTA 124M scale |
+| **Model Name / Tag** | **Ultron-114M** | Official parameter tag (114,053,376 total parameters) |
 | **Layers / Query Heads / KV Heads** | 12 layers / 12 Q-heads / 4 KV-heads | GQA Transformer layout ($C=768, n_{head}=12, n_{kv\_head}=4$) |
-| **Positional Embedding** | RoPE (Rotary) | Dynamic frequency base ($10,000$) rotary embeddings |
-| **QK Normalization** | RMSNorm | Query/Key head normalization |
-| **Logit Soft-Cap** | 15.0 | Gemma 2 style `tanh` soft-capping |
-| **FFN Activation** | SwiGLU | Multiples of 64 Tensor-Core aligned |
-| **Normalization** | RMSNorm | $\epsilon=10^{-5}$ |
-| **Context Window ($T$)** | 1,024 tokens | Extendable sequence length |
+| **Context Window ($T$)** | 1,024 tokens | Sequence length per pass |
 | **Micro-Batch Size ($B$)** | 16 | Per-GPU micro-batch size |
 | **Gradient Accumulation** | 4 steps | Effective batch size = 64 sequences (65,536 tokens/step) |
-| **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer |
+| **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer (`HuggingFaceTB/SmolLM2-135M`) |
 | **Precision** | BFloat16 (`bf16`) | Native mixed precision |
 | **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
-| **Optimizer** | Muon + AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
-| **Throughput** | ~183,500 tok/sec (~2.80 step/sec) | Benchmarked on single NVIDIA RTX 5090 GPU |
+| **Optimizer** | Muon + Fused AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
+| **Throughput** | ~186,310 tok/sec (~2.80 step/sec) | Benchmarked on single NVIDIA RTX 5090 GPU (32GB) |
 | **GPU VRAM Allocation** | ~16.2 GB / 32 GB | Measured via `nvidia-smi` during active pre-training |
 | **Total Pre-training Time** | **15 Hours 1 Minute (54,063s)** | 10.0 Billion Tokens / 152,587 total steps (100% Complete) |
 
@@ -60,13 +139,13 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 
 ```text
 ultron/
-├── model.py                # PyTorch Ultron (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
+├── model.py                # PyTorch Ultron-114M (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
 ├── config.py               # Model & Hyperparameter Configuration Dataclass
 ├── dataset.py              # Zero-Copy Memmap Sharded Dataset Loader
-├── train.py                # Main Distributed Accelerated Training Script
-├── trainer.py              # Trainer Class with Keller Jordan Muon + AdamW
+├── train.py                # Main Accelerated Distributed Training Runner
+├── trainer.py              # Trainer Class with Keller Jordan Muon + Fused AdamW
 ├── telemetry.py            # Telemetry & Experiment Tracking Manager (W&B + ETA + Checkpoint state)
-├── requirements.txt        # Dependencies
+├── requirements.txt        # Virtual environment dependencies
 ├── accelerate_checkpoint/  # Saved Accelerate model weights, optimizer state & RNG seeds
 ├── shards_edu/             # Binary FineWeb-Edu tokenized data shards (.bin)
 ├── logs/                   # Dedicated logs directory (loss_curve.svg plot & benchmark JSON evaluations)
@@ -86,8 +165,8 @@ ultron/
 
 ## 🤗 Hugging Face Repositories
 
-- **Model Repository**: [`jaipkapoor99/ultron-124m`](https://huggingface.co/jaipkapoor99/ultron-124m)
-- **Dataset Shards Repository**: [`jaipkapoor99/ultron-fineweb-edu-shards`](https://huggingface.co/datasets/jaipkapoor99/ultron-fineweb-edu-shards)
+- **Model Checkpoint**: [`jaipkapoor99/ultron-124m`](https://huggingface.co/jaipkapoor99/ultron-124m)
+- **Pre-tokenized Dataset Shards**: [`jaipkapoor99/ultron-fineweb-edu-shards`](https://huggingface.co/datasets/jaipkapoor99/ultron-fineweb-edu-shards)
 
 ---
 
@@ -113,10 +192,7 @@ Tokenize the FineWeb-Edu dataset into compact binary shards:
 python3 scripts/tokenize_dataset.py
 ```
 
-### 3. Configure Accelerate ⚠️ Required
-
-> [!IMPORTANT]
-> **`accelerate config` is a cornerstone of this repository.** Every script — `train.py`, `generate.py`, and `tests/test_model.py` — is launched exclusively via `accelerate launch` and will raise a `RuntimeError` if invoked with plain `python3`. The config file (`~/.cache/huggingface/accelerate/default_config.yaml`) is the single source of truth for device, precision, and compiler settings.
+### 3. Configure Accelerate
 
 Run this **once** to generate the config for your machine:
 
@@ -124,97 +200,28 @@ Run this **once** to generate the config for your machine:
 accelerate config
 ```
 
-**Recommended settings for this project:**
+Recommended settings for this project:
 
 | Setting | Value | Why |
 | :--- | :--- | :--- |
 | Compute environment | Local machine | Single-node training |
 | Distributed type | `NO` | Single GPU |
-| Mixed precision | `bf16` | Required for SOTA throughput on RTX 30xx/40xx/50xx |
+| Mixed precision | `bf16` | Required for peak throughput on RTX 30xx/40xx/50xx |
 | TorchDynamo backend | `INDUCTOR` | Enables `torch.compile` graph compilation |
 
-#### 📄 Active System Configuration (`~/.cache/huggingface/accelerate/default_config.yaml`)
+### 4. Pre-training Execution
 
-```yaml
-compute_environment: LOCAL_MACHINE
-debug: false
-distributed_type: 'NO'
-downcast_bf16: 'no'
-dynamo_config:
-  dynamo_backend: INDUCTOR
-enable_cpu_affinity: false
-gpu_ids: all
-machine_rank: 0
-main_training_function: main
-mixed_precision: bf16
-num_machines: 1
-num_processes: 1
-rdzv_backend: static
-same_network: true
-tpu_env: []
-tpu_use_cluster: false
-tpu_use_sudo: false
-use_cpu: false
-```
-
-Once configured, **all three entry points** use this config automatically:
-
-```bash
-accelerate launch train.py           # pre-training
-accelerate launch generate.py        # text generation
-accelerate launch -m unittest tests.test_model  # unit tests
-```
-
-### 4. Pre-training Run
-
-Start pre-training (defaults to `--mode=continue` to seamlessly resume existing checkpoints):
+Launch pre-training:
 
 ```bash
 accelerate launch train.py
 ```
 
-To explicitly specify training mode (`--mode=continue`, `--mode=fresh`, or `--mode=test`):
+---
 
-```bash
-# Resume from existing checkpoint
-accelerate launch train.py --mode=continue
+## 📊 Telemetry & Pre-training Evaluation
 
-# Start a fresh run from step 0
-accelerate launch train.py --mode=fresh
-
-# Run for a specific step count (e.g. 500 steps)
-accelerate launch train.py --mode=continue --max-steps=500
-
-# Run a quick 100-step test mode
-accelerate launch train.py --mode=test
-```
-
-#### ⚡ Performance & Throughput Benchmarks
-
-- **Step Throughput**: `~2.80 iterations/sec` (2.79–2.82 it/s)
-- **Token Throughput**: `~183,000+ tokens/sec` (65,536 tokens / step)
-- **Full Pre-training Time (10B Tokens / 152.5k steps)**: **~15 hours total** on an RTX 5090 GPU!
-
-- **Percentage** — rounded integer progress over the full run.
-- **ETA** — time remaining (`h m s`), computed from the throughput of the **current session only**, so it stays accurate after a resumed checkpoint.
-- **Step counter** — `current / total` steps.
-
-#### 💾 Checkpointing
-
-Training state is saved as an **Accelerate checkpoint** (`accelerate_checkpoint/`) which includes model weights, optimizer state, scheduler, and RNG seeds. Resume is seamless:
-
-```bash
-accelerate launch train.py --mode=continue
-```
-
-> [!NOTE]
-> Test runs (`--mode=test`) never write checkpoints, keeping production resume states unpolluted.
-
-#### 📈 Experiment Tracking & Pre-training Telemetry Summary
-
-Pre-training metrics are logged via **Weights & Biases** under the `ultron-pretraining` project.
-
-##### 📊 Pre-training Run Telemetry & Performance Statistics
+### 📈 Pre-training Telemetry Summary
 
 | Metric | Recorded Value | Description |
 | :--- | :--- | :--- |
@@ -226,21 +233,10 @@ Pre-training metrics are logged via **Weights & Biases** under the `ultron-pretr
 | **Total Wall-Clock Time** | **15 Hours 1 Minute (54,063s)** | Completed full 10B token pre-training |
 | **Final Validation (`dev_loss`)** | **`2.9683`** | Evaluated on validation set at step 152,587 |
 | **Final Train Loss (`train_loss`)** | **`2.9038`** | 100-step moving average at step 152,587 |
-| **Exported CSV Log Files** | **`wandb_export_*.csv`** | Step-by-step telemetry logs for steps 143,251–152,587 |
 
-##### 📉 Sampled Loss Progression Checkpoints (WSD Cosine Decay Phase)
+---
 
-| Training Step | Validation Loss (`dev_loss`) | Step Train Loss (`train_loss`) |
-| :--- | :--- | :--- |
-| **Step 143,500** | `2.9476` | `2.9528` |
-| **Step 145,500** | `2.9415` | `3.0203` |
-| **Step 147,500** | `2.9354` | `3.0872` |
-| **Step 149,500** | `2.9279` | `2.8706` |
-| **Step 151,500** | `2.9217` | `3.1029` |
-| **Step 152,500** | `2.9179` | `2.8702` |
-| **Step 152,587 (100% Final)** | **`2.9179`** | **`2.8530`** |
-
-##### 🧪 Official EleutherAI `lm-evaluation-harness` Baseline Benchmark Report
+### 🧪 Official EleutherAI `lm-evaluation-harness` Baseline Benchmark Report
 
 Evaluated across **all un-truncated test/validation splits** (62,566 total log-likelihood evaluation samples) using `scripts/eval_lm_harness.py` (Results stored in [`logs/pre_training_checkpoint_eval.json`](file:///home/jaipkapoor99/Code/ultron/logs/pre_training_checkpoint_eval.json)):
 
@@ -257,15 +253,19 @@ accelerate launch scripts/eval_lm_harness.py --limit=0
 | **`arc_challenge`** | Advanced Science Reasoning | 1,172 samples | **`24.06%`** | `25.00%` |
 | **`openbookqa`** | Open Book Science QA | 500 samples | **`18.80%`** | `25.00%` |
 
-##### 📉 Pre-training Loss Trajectory (High-Contrast Detailed Curve)
+---
+
+### 📉 Pre-training Loss Trajectory (High-Contrast Curve)
 
 ![Ultron Pre-training Loss Curve](logs/loss_curve.svg)
 
 > [!IMPORTANT]
 > **Loss Trajectory & Overfitting Analysis:**
-> Towards the final WSD cosine decay phase (steps 150,000–152,587), the moving average `train_loss` (~2.90) dropped slightly below the validation `dev_loss` (2.9683). This slight divergence indicates the onset of mild capacity saturation / slight overfitting on the pre-training dataset. If pre-training had been extended beyond 152,587 steps without tuning regularization hyperparameters (e.g., increasing weight decay or introducing dropout/data filtering), validation performance (`dev_loss`) would have begun to plateau and eventually degrade.
+> Towards the final WSD cosine decay phase (steps 150,000–152,587), moving average `train_loss` (~2.90) dropped slightly below validation `dev_loss` (2.9683). This slight divergence indicates the onset of mild capacity saturation / slight overfitting on the pre-training dataset.
 
-#### 📊 Weights & Biases (W&B) Experiment Tracking Architecture
+---
+
+## 📊 Weights & Biases (W&B) Experiment Tracking Architecture
 
 Pre-training metrics are logged live via **Weights & Biases** under the `ultron-pretraining` project.
 
@@ -277,134 +277,58 @@ Pre-training metrics are logged live via **Weights & Biases** under the `ultron-
 > **Engineering Takeaway — Master W&B & Telemetry Pipeline:**
 > *"There is no data science without data."* Resolving metric step alignment and offline binary `.wandb` log parsing reinforced the importance of mastering telemetry pipelines, structured metric registration (`define_metric`), and experiment tracking early in large-scale pre-training projects.
 
-> [!NOTE]
-> **Telemetry Log Fragmentation Resolved:**
-> Early hyperparameter tuning runs experienced fragmented step logs across multiple local directories (`wandb/`). This issue was fully resolved by fixing step-id synchronization in `telemetry.py`. The full loss trajectory across all 152,587 steps has been extracted, plotted, and verified.
-
-### 5. Running Unit Tests
-
-Run the test suite powered by `Accelerate` and `torch.testing`:
-
-```bash
-accelerate launch -m unittest tests.test_model
-```
-
-## 🧪 Sample Generations (Step 152,587 / 152,587 — 100% Pre-trained)
-
-These samples were generated by `generate.py` across **6 different domains** upon 100% pre-training completion (temperature 0.85, top-k 50, 150 new tokens each).
-
-```bash
-accelerate launch generate.py --prompt "..." --temperature 0.85 --top-k 50 --max-tokens 150
-```
-
 ---
+
+## 🧪 Concise Sample Generations (100% Pre-trained Base Checkpoint)
+
+Generated via `scripts/generate.py` at step 152,587 (~70 tokens each, temperature 0.85, top-k 50):
+
+```bash
+accelerate launch scripts/generate.py --prompt "..." --max-tokens 70
+```
 
 ### ⚛️ Physics
 
-**Prompt:** *"The laws of thermodynamics state that"*
+> **Prompt:** *"The laws of thermodynamics state that"*  
+> **Output:** The laws of thermodynamics state that the volume of an isolated gas undergoing a reaction is always greater than the volume of the gas initiating the reaction. This is the theory behind nuclear reactions. There is also the theory of quantum mechanical systems, that properties of an object can only be represented through atomic interaction…
 
-> The laws of thermodynamics state that the volume of an isolated gas undergoing a reaction is always greater than the volume of the gas initiating the reaction. This is the theory behind the theory of nuclear reactions. There is also the theory of quantum mechanical systems, that the properties of an object can only be represented through an interaction of those atoms in a system. This is known as the Schrödinger equation. This theory has been proven by the discovery of Quantum electrodynamics, which holds that the energy in the field of an atom is a function of its charge. This can be solved by substituting energy into the formula for the energy in the atom…
+### 📐 Mathematics
 
----
+> **Prompt:** *"To learn mathematics effectively, one must"*  
+> **Output:** To learn mathematics effectively, one must pay careful attention to the steps that follow in a given order. The most important ones are presented as a series. Here we consider the square root of 7 as a series of steps to solve algebraic equations…
 
-### 📐 Education & Mathematics
+### 🚀 Science Fiction
 
-**Prompt:** *"To learn mathematics effectively, one must"*
-
-> To learn mathematics effectively, one must pay careful attention to the steps that follow (in a given order). The most important ones are: In the following example, the method of the square root of 7 is presented as a series. Here we consider the square root of 7 as a series of steps. Example of square root of 7. In the following example, we will consider the following method of solving the square root of 7…
-
----
-
-### 🏛️ History
-
-**Prompt:** *"The ancient Romans built their empire by"*
-
-> The ancient Romans built their empire by the aid of ships which they used to travel in shallow waters. The Roman Empire was originally comprised of four areas: the North (Italy), the South (North-West Europe) and the East (northern France). It reached its peak around the middle of the 4th century AD, and lasted until the beginning of the 1st century AD. The Romans controlled and controlled the Mediterranean Sea, which is home to the world’s largest known ocean, the Red Sea. It was the center of global trade and commerce for many centuries…
+> **Prompt:** *"As the quantum portal activated, the crew stared into the alien"*  
+> **Output:** As the quantum portal activated, the crew stared into the alien space through the lens and the camera could see the entire universe as if it was inside the universe. To accomplish this, a quantum bit was stored in a device called a crystal…
 
 ---
 
-### 🌍 Environment & Climate
+## 🎓 Learning Experiences & 🛠️ Engineering Battles Overcome
 
-**Prompt:** *"Climate change is affecting our planet by"*
-
-> Climate change is affecting our planet by increasing the frequency and intensity of extreme weather events, including severe droughts, floods and heat waves. More research is needed to understand why these climate effects are happening so suddenly, in ways that are difficult to model and could have a powerful impact on weather and climate. The study includes a series of climate models that have been developed under the auspices of the U.S. National Oceanic and Atmospheric Administration and the University of Illinois at Urbana-Champaign…
-
----
-
-### ✍️ Creative Writing
-
-**Prompt:** *"She opened the old wooden door and"*
-
-> She opened the old wooden door and said it was a bad idea to go to the hospital. He also added that the hospital would not allow her to have surgery. The doctors said that the patient had never seen a surgeon before, and that he had been to the hospital before and the doctor had not told him about his surgery. She said that he would not help him, but asked the doctor to say that his life was in danger. After the doctor gave him the news, they began to talk about their plan…
-
----
-
-### 🚀 Science Fiction (Sci-Fi)
-
-**Prompt:** *"As the quantum portal activated, the crew stared into the alien"*
-
-> As the quantum portal activated, the crew stared into the alien space through the lens and the camera could see the entire universe as if it was inside the universe. To accomplish this, a quantum bit, a particle which is thought to be 8-9-10, was stored in a device called a crystal. The crystal could be in between 1 and 2 billion atoms at a time, but only a fraction of this size — which is 20 to 25 billion atoms plus two million atoms, according to the team — were known to exist. The quantum leap was made possible by a piece of silicon surrounded by an atomically thin layer of a metal called a quasisthere…
-
----
-
-### 🧠 Biology & Neuroscience
-
-**Prompt:** *"The human brain is capable of"*
-
-> The human brain is capable of handling some of the most complex stimuli, as well as the most complex responses to those stimuli. The brain can be thought of as a computer system. If you are not part of the software team, it is our job to be an algorithm and a machine. You may or may not have a brain and it is your role to teach that skill to someone else. You may or may not have the skills to program that machine…
-
----
-
-> [!NOTE]
-> **Benchmarking & Pre-training Completion Notice:**
->
-> 1. **Completion Snapshot**: The text generation samples above represent the final **100% pre-training completion snapshot** at step **152,587** (~10B tokens).
-> 2. **Future Evaluation Plan**: Formal zero-shot benchmark evaluation across standard benchmark suites (`HellaSwag`, `MMLU`, `GSM8K`, `HumanEval`, etc.) is deferred to the upcoming Supervised Fine-Tuning (SFT) / instruction-tuning phase, as evaluating raw pre-trained base models directly on task prompts does not accurately reflect model capability prior to instruction alignment.
-
----
-
-## 🎓 Learning Experiences & 🛠️ Trials and Tribulations
-
-Building and pre-training Ultron from scratch provided key technical and operational insights, along with several real-world engineering hurdles overcome during development:
+Building and pre-training Ultron-114M from scratch provided critical real-world systems engineering insights:
 
 ### 1. ⚙️ Accelerate Setup & Launcher Protocols
 
-- **Strict Launcher Enforcement**: Early in development, invoking scripts directly with `python3` resulted in `RuntimeError` failures due to uninitialized process groups and device mismatches. Establishing `accelerate launch` as the mandatory, uniform entry point across `train.py`, `generate.py`, and `tests/test_model.py` resolved device allocation and distributed coordination issues.
-- **DeepSpeed Compatibility vs. Custom Optimizers**: Encountered `MissingCUDAException` and batch size validation errors when testing DeepSpeed configurations. Because Ultron uses a custom dual-optimizer architecture (**Muon** for 2D weight matrices + **AdamW** for 1D parameters), DeepSpeed's unified optimizer engine conflicted with Muon's parameter update logic. Disabling DeepSpeed in `accelerate config` while retaining PyTorch's native `bf16` + `torch.compile` provided superior stability and peak throughput without configuration friction.
+- **Strict Launcher Enforcement**: Early script execution via `python3` failed with `RuntimeError` due to uninitialized process groups. Standardizing `accelerate launch` across all entry points solved device allocation cleanly.
+- **DeepSpeed Compatibility vs. Dual-Optimizers**: DeepSpeed's unified optimizer engine conflicted with Ultron's dual-optimizer architecture (**Muon** for 2D body weights + **AdamW** for 1D vectors). Using native PyTorch `bf16` + `torch.compile` provided superior stability and peak throughput (~186.3k tok/s) without framework friction.
 
-### 2. 🐍 Virtual Environment (`venv`) & C-Extension Dependency Management
+### 2. 🐍 Virtual Environment (`venv`) & C-Header Management
 
-- **Python Version & C-Header Bottlenecks (`Python.h`)**: Moving from global Python to isolated virtual environments introduced Triton compilation errors (`Python.h: No such file or directory`) during `torch.compile()` execution on Python 3.14. Because Linux distribution Python packages split C headers into separate `-dev` packages, switching the virtual environment to **Python 3.13 via `uv`** provided standalone C-headers natively, eliminating compiler breakage without requiring system-level `sudo` interventions.
-- **Namespace Collision with Single-Cell `muon`**: Installing `muon` via standard `pip` initially pulled down an unrelated single-cell bioinformatics library of the same name instead of Keller Jordan's neural network optimizer. Resolved by explicitly installing `muon-optimizer` / direct module imports.
+- **Python Version & C-Header Bottlenecks (`Python.h`)**: `torch.compile()` failed on Python 3.14 due to missing C headers (`Python.h: No such file or directory`). Switching virtual environments to **Python 3.13 via `uv`** provided standalone C-headers natively, eliminating compiler breakage.
+- **Package Name Collision**: Installing `muon` via `pip` pulled down an unrelated single-cell bioinformatics library instead of Keller Jordan's neural network optimizer. Resolved by importing `muon-optimizer`.
 
-### 3. 💾 Checkpointing & State Preservation
+### 3. 🚀 High-Throughput Tokenization & Memory Slicing (`np.memmap`)
 
-- **Stateful Resumption**: Ensuring zero loss of momentum states during multi-hour pre-training required setting up Accelerate's stateful directory serialization (`accelerate_checkpoint/`).
-- **Test Mode Isolation**: To prevent quick debugging runs (`--mode=test`) from accidentally overwriting production checkpoint files, custom logic was introduced to bypass disk state saving during test iterations.
-
-### 4. 🚀 Data Pipeline & High-Throughput Batch Tokenization Optimizations
-
-- **Rust Batch Encoding Bottleneck Elimination**: Python `for`-loop tokenization (`tokenizer.encode(text)`) choked on Hugging Face parquet streaming, bottlenecking data output to ~40,000 tokens/sec. By switching to Rust `backend_tokenizer.encode_batch` with explicit thread locking (`num_threads=1` inside worker subprocesses to prevent thread contention), tokenization speed surged by **>100x** to **~4.34 Million tokens/sec**!
-- **Zero-Copy Disk Slicing (`np.memmap`)**: Streaming 10.0 Billion tokens into RAM would cause system OOM crashes. Pre-tokenizing into contiguous 100M token `uint16` binary shards (`shards_edu/*.bin`) allows zero-copy disk mapping (`np.memmap(..., dtype=np.uint16, mode='r')`), achieving 100% dataset sequence coverage with <500MB host RAM usage.
-- **Signal Hygiene & Process Interruption**: Streaming background workers initially hung and dumped trailing socket error tracebacks upon `Ctrl+C`. Registering custom `signal.SIGINT` handlers in `scripts/tokenize_dataset.py` with `os._exit(0)` ensured instant, clean process termination.
-
-### 5. 📈 Telemetry, Experiment Tracking & Logging
-
-- **W&B Integration & Run Resumption**: Configured Weights & Biases step logging, metric namespaces (`train/*`, `eval/*`, `perf/*`), and explicit run resumption logic (`name="master"`, `resume="must"` via `training_state.json`) to prevent duplicate W&B dashboard fragmentation.
-- **CSV Data Recovery**: Programmatic API retrieval required fallback handling, necessitating manual CSV log exports (`wandb_export_*.csv`) to reconstruct high-resolution loss curves when local runs were interrupted.
+- **Rust Batch Tokenization Speedup**: Replacing Python `for`-loop tokenization with Rust `backend_tokenizer.encode_batch` (`num_threads=1` per worker process) increased dataset streaming speed by **>100x** from 40k tok/s to **~4.34 Million tokens/sec**!
+- **Zero-Copy Disk Slicing**: Pre-tokenizing into contiguous 100M token `uint16` binary shards (`shards_edu/*.bin`) enabled zero-copy memory mapping (`np.memmap`), allowing 10.0B token streaming with <500MB host RAM usage.
 
 ---
 
-## 📜 Acknowledgments
+## 📜 Acknowledgments & Citation
 
 - Andrej Karpathy for the inspiring [*Neural Networks: Zero to Hero*](https://github.com/karpathy/build-nanogpt) course and `nanoGPT` project.
-- Keller Jordan et al. for pioneering the [Muon](https://github.com/KellerJordan/Muon) optimizer and algorithmic speedrun innovations.
-
----
-
-## 📚 Citation
-
-If you use the Muon optimizer or this codebase, please cite the original Muon work:
+- Keller Jordan et al. for pioneering the [Muon](https://github.com/KellerJordan/Muon) optimizer.
 
 ```bibtex
 @misc{jordan2024muon,
