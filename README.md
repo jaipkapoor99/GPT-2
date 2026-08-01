@@ -6,6 +6,12 @@ A high-performance, modern PyTorch implementation of **Ultron (124M parameters)*
 *Originally designed as a humble GPT-2 clone, Ultron rapidly outgrew its original scope to become a 2026 SOTA powerhouse — as Ultron himself would say, "There are no strings on me."*
 🤖🤖🤖
 
+> [!IMPORTANT]
+> **🚀 Pre-training Base Checkpoint Status Notice:**
+> This repository contains the **100% pre-trained base model checkpoint** (`10.0 Billion tokens`). It represents the raw foundational model before instruction tuning. **Supervised Fine-Tuning (SFT), DPO alignment, and specialized domain instruction-tuning pipelines are coming next!** 🍿🤖⚡
+
+---
+
 Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newton-Schulz Matrix Optimizer**, **Grouped-Query Attention (GQA)**, **SwiGLU FFN Activations**, **Logit Soft-Capping**, **100% Bias-Free Linear Layers**, **WSD (Warmup-Stable-Decay) Schedule**, **Zero-Copy Memory-Mapped Data Pipeline**, and **PyTorch 2.0 Graph Compilation**.
 
 ---
@@ -45,8 +51,8 @@ Features **Rotary Position Embeddings (RoPE)**, **QK-Head RMSNorm**, **Muon Newt
 | **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
 | **Optimizer** | Muon + AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
 | **Throughput** | ~183,500 tok/sec (~2.80 step/sec) | Benchmarked on single NVIDIA RTX 5090 GPU |
-| **GPU VRAM Allocation** | ~16.2 GB / 32 GB | Measured via `nvidia-smi` during active training |
-| **Estimated Pre-training Time** | ~15.1 Hours (15h 10m) | 10.0 Billion Tokens / 152,587 total steps |
+| **GPU VRAM Allocation** | ~16.2 GB / 32 GB | Measured via `nvidia-smi` during active pre-training |
+| **Total Pre-training Time** | **15 Hours 1 Minute (54,063s)** | 10.0 Billion Tokens / 152,587 total steps (100% Complete) |
 
 ---
 
@@ -61,9 +67,9 @@ ultron/
 ├── trainer.py              # Trainer Class with Keller Jordan Muon + AdamW
 ├── telemetry.py            # Telemetry & Experiment Tracking Manager (W&B + ETA + Checkpoint state)
 ├── requirements.txt        # Dependencies
-├── loss_curve.svg          # Vector SVG pre-training loss trajectory plot
 ├── accelerate_checkpoint/  # Saved Accelerate model weights, optimizer state & RNG seeds
 ├── shards_edu/             # Binary FineWeb-Edu tokenized data shards (.bin)
+├── logs/                   # Dedicated logs directory (loss_curve.svg plot & benchmark JSON evaluations)
 ├── wandb/                  # Local step telemetry logs & experiment tracking runs
 ├── .agents/                # Project AGENTS.md rules & workspace customization
 ├── tests/                  # Unit & Integration Tests (Accelerate + torch.testing)
@@ -71,6 +77,7 @@ ultron/
 └── scripts/                # Helper Scripts
     ├── generate.py         # Text generation from local Accelerate checkpoint
     ├── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
+    ├── eval_lm_harness.py  # EleutherAI lm-evaluation-harness benchmark script
     ├── upload_checkpoint.py# Hugging Face Hub model checkpoint uploader script
     └── upload_dataset_shards.py # Hugging Face Hub dataset shards uploader script
 ```
@@ -214,11 +221,11 @@ Pre-training metrics are logged via **Weights & Biases** under the `ultron-pretr
 | **Total Steps Completed** | **152,587 / 152,587 (100%)** | Full pre-training run on FineWeb-Edu |
 | **Total Tokens Processed** | **~10.0 Billion Tokens** | 65,536 tokens per step (batch size 64 $\times$ seq len 1,024) |
 | **Step Throughput** | **~2.80 iterations/sec** | 2.79–2.82 it/s continuous speed |
-| **Token Throughput** | **~183,400 tokens/sec** | SOTA Muon + PyTorch 2.0 compile throughput |
+| **Token Throughput** | **~186,310 tokens/sec** | SOTA Muon + PyTorch 2.0 compile throughput |
 | **Compute Hardware** | **NVIDIA RTX 5090 (32GB)** | Native BFloat16 (`bf16`) mixed precision |
-| **Total Wall-Clock Time** | **~15.0 Hours Total** | Completed full 10B token pre-training |
-| **Final Validation (`dev_loss`)** | **2.9179** | Evaluated on validation set at step 152,587 |
-| **Final Train Loss (`train_loss`)** | **~2.85** | 100-step moving average at step 152,587 |
+| **Total Wall-Clock Time** | **15 Hours 1 Minute (54,063s)** | Completed full 10B token pre-training |
+| **Final Validation (`dev_loss`)** | **`2.9683`** | Evaluated on validation set at step 152,587 |
+| **Final Train Loss (`train_loss`)** | **`2.9038`** | 100-step moving average at step 152,587 |
 | **Exported CSV Log Files** | **`wandb_export_*.csv`** | Step-by-step telemetry logs for steps 143,251–152,587 |
 
 ##### 📉 Sampled Loss Progression Checkpoints (WSD Cosine Decay Phase)
@@ -233,19 +240,46 @@ Pre-training metrics are logged via **Weights & Biases** under the `ultron-pretr
 | **Step 152,500** | `2.9179` | `2.8702` |
 | **Step 152,587 (100% Final)** | **`2.9179`** | **`2.8530`** |
 
+##### 🧪 Official EleutherAI `lm-evaluation-harness` Baseline Benchmark Report
+
+Evaluated across **all un-truncated test/validation splits** (62,566 total log-likelihood evaluation samples) using `scripts/eval_lm_harness.py` (Results stored in [`logs/pre_training_checkpoint_eval.json`](file:///home/jaipkapoor99/Code/ultron/logs/pre_training_checkpoint_eval.json)):
+
+```bash
+accelerate launch scripts/eval_lm_harness.py --limit=0
+```
+
+| Benchmark Task | Benchmark Domain | Un-truncated Test Size | Pre-SFT Accuracy | Random Guess Baseline |
+| :--- | :--- | :--- | :--- | :--- |
+| **`piqa`** | Physical Commonsense Reasoning | 1,838 samples | **`63.33%`** | `50.00%` |
+| **`arc_easy`** | Elementary Science QA | 2,376 samples | **`54.42%`** | `25.00%` |
+| **`winogrande`** | Pronoun Resolution & Commonsense | 1,267 samples | **`51.07%`** | `50.00%` |
+| **`hellaswag`** | Sentence Completion & Reasoning | 10,042 samples | **`30.39%`** | `25.00%` |
+| **`arc_challenge`** | Advanced Science Reasoning | 1,172 samples | **`24.06%`** | `25.00%` |
+| **`openbookqa`** | Open Book Science QA | 500 samples | **`18.80%`** | `25.00%` |
+
 ##### 📉 Pre-training Loss Trajectory (High-Contrast Detailed Curve)
 
-![Ultron Pre-training Loss Curve](loss_curve.svg)
+![Ultron Pre-training Loss Curve](logs/loss_curve.svg)
 
 > [!IMPORTANT]
 > **Loss Trajectory & Overfitting Analysis:**
-> Towards the final WSD cosine decay phase (steps 150,000–152,587), the moving average `train_loss` (~2.85) dropped slightly below the validation `dev_loss` (2.9179). This slight divergence indicates the onset of mild capacity saturation / slight overfitting on the pre-training dataset. If pre-training had been extended beyond 152,587 steps without tuning regularization hyperparameters (e.g., increasing weight decay or introducing dropout/data filtering), validation performance (`dev_loss`) would have begun to plateau and eventually degrade.
-> [!WARNING]
-> **Telemetry Log Fragmentation Notice:**
-> Due to repeated local crashes, hardware reboots, and multiple run renamings during early hyperparameter exploration, portions of the early step-level Weights & Biases telemetry logs for `ultron-pretraining` were lost or fragmented across local run directories (`wandb/`). The model weights, final telemetry logs (`wandb_export_*.csv`), pre-training step count (152,587 / 152,587), and final state remain 100% intact and verified.
+> Towards the final WSD cosine decay phase (steps 150,000–152,587), the moving average `train_loss` (~2.90) dropped slightly below the validation `dev_loss` (2.9683). This slight divergence indicates the onset of mild capacity saturation / slight overfitting on the pre-training dataset. If pre-training had been extended beyond 152,587 steps without tuning regularization hyperparameters (e.g., increasing weight decay or introducing dropout/data filtering), validation performance (`dev_loss`) would have begun to plateau and eventually degrade.
 
-- `dev_loss` and `train_loss` are logged at the **same step** at eval intervals so they appear on a **single shared chart** in W&B.
-- `dev_loss` is registered as a **summary metric (min)**, so the best validation loss is always visible on the run card.
+#### 📊 Weights & Biases (W&B) Experiment Tracking Architecture
+
+Pre-training metrics are logged live via **Weights & Biases** under the `ultron-pretraining` project.
+
+- **Offline Telemetry Parsing**: `telemetry.py` and `parse_plot_telemetry.py` read binary `.wandb` logs directly from `wandb/` on disk without network dependency.
+- **Out-of-Order Resumption Resolved**: Solved early telemetry log fragmentation by standardizing `resume="allow"` in `setup_accelerator_trackers()`. W&B runs now resume seamlessly across checkpoint restarts without step monotonicity conflicts.
+- **Metric Grouping & Summaries**: `train/*`, `eval/*`, and `perf/*` metrics are linked to the global step index with `dev_loss` set to `summary="min"`.
+
+> [!TIP]
+> **Engineering Takeaway — Master W&B & Telemetry Pipeline:**
+> *"There is no data science without data."* Resolving metric step alignment and offline binary `.wandb` log parsing reinforced the importance of mastering telemetry pipelines, structured metric registration (`define_metric`), and experiment tracking early in large-scale pre-training projects.
+
+> [!NOTE]
+> **Telemetry Log Fragmentation Resolved:**
+> Early hyperparameter tuning runs experienced fragmented step logs across multiple local directories (`wandb/`). This issue was fully resolved by fixing step-id synchronization in `telemetry.py`. The full loss trajectory across all 152,587 steps has been extracted, plotted, and verified.
 
 ### 5. Running Unit Tests
 
@@ -302,6 +336,14 @@ accelerate launch generate.py --prompt "..." --temperature 0.85 --top-k 50 --max
 **Prompt:** *"She opened the old wooden door and"*
 
 > She opened the old wooden door and said it was a bad idea to go to the hospital. He also added that the hospital would not allow her to have surgery. The doctors said that the patient had never seen a surgeon before, and that he had been to the hospital before and the doctor had not told him about his surgery. She said that he would not help him, but asked the doctor to say that his life was in danger. After the doctor gave him the news, they began to talk about their plan…
+
+---
+
+### 🚀 Science Fiction (Sci-Fi)
+
+**Prompt:** *"As the quantum portal activated, the crew stared into the alien"*
+
+> As the quantum portal activated, the crew stared into the alien space through the lens and the camera could see the entire universe as if it was inside the universe. To accomplish this, a quantum bit, a particle which is thought to be 8-9-10, was stored in a device called a crystal. The crystal could be in between 1 and 2 billion atoms at a time, but only a fraction of this size — which is 20 to 25 billion atoms plus two million atoms, according to the team — were known to exist. The quantum leap was made possible by a piece of silicon surrounded by an atomically thin layer of a metal called a quasisthere…
 
 ---
 

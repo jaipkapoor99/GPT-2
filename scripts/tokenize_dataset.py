@@ -28,7 +28,10 @@ def main(shard_size_tokens=100_000_000, max_shards=100):
     print(f"Existing Shards   : {start_shard} shards ({start_shard * shard_size_tokens / 1e9:.2f}B tokens)")
     print(f"Resuming at Shard : fineweb_edu_shard_{start_shard:04d}.bin")
     
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
+    from config import UltronConfig
+    config = UltronConfig()
+    
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
     eos_token_id = tokenizer.eos_token_id or 0
 
     raw_dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)

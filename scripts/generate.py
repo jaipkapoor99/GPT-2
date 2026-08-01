@@ -83,12 +83,13 @@ def main():
 
     accelerator.print(f"Device : {accelerator.device}")
 
-    # ── Tokenizer ─────────────────────────────────────────────────────────────
-    accelerator.print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M")
-
     # ── Model ─────────────────────────────────────────────────────────────────
     config = UltronConfig()
+
+    # ── Tokenizer ─────────────────────────────────────────────────────────────
+    accelerator.print(f"Loading tokenizer ({config.tokenizer_name})...")
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
+
     model = UltronModel(config)
     model = load_model_weights(model, args.checkpoint)
 

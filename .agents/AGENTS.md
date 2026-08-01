@@ -28,3 +28,7 @@
 ## 7. Programmatic Telemetry & Data Extraction
 
 - Standardize programmatic retrieval of metric trajectory data using the official `wandb.Api()` (`run.history()`) to ensure consistent data extraction for analysis, visualization, and offline CSV reporting.
+
+## 8. Reuse Established Libraries & Standard Frameworks (Don't Reinvent the Wheel)
+
+- Always leverage battle-tested open-source libraries and official frameworks (e.g. EleutherAI `lm-evaluation-harness`, Hugging Face `datasets` / `transformers`, `tqdm`, `accelerate`) rather than writing custom ad-hoc implementations or reinventing existing tooling.
