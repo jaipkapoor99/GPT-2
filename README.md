@@ -259,9 +259,9 @@ accelerate launch scripts/eval_lm_harness.py --limit=0
 
 ![Ultron Pre-training Loss Curve](logs/loss_curve.svg)
 
-> [!IMPORTANT]
-> **Loss Trajectory & Overfitting Analysis:**
-> Towards the final WSD cosine decay phase (steps 150,000–152,587), moving average `train_loss` (~2.90) dropped slightly below validation `dev_loss` (2.9683). This slight divergence indicates the onset of mild capacity saturation / slight overfitting on the pre-training dataset.
+> [!NOTE]
+> **Loss Trajectory & WSD Decay Analysis:**
+> During the final WSD cosine decay phase (steps 150,000–152,587), the moving average `train_loss` (~2.85) dropped slightly below the validation `dev_loss` (2.9179). This ~0.06 delta is the expected mathematical outcome of learning rate annealing as step sizes approach zero, allowing the optimizer to settle efficiently into local minima while validation loss continuously improves.
 
 ---
 

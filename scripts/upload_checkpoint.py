@@ -53,16 +53,17 @@ def main():
     )
     console.print("[bold green]✅ Checkpoint files uploaded successfully![/bold green]")
 
-    # 2. Upload README.md and metadata.yaml if present
-    if os.path.exists("README.md"):
-        console.print("[bold blue]📄 Syncing README.md documentation...[/bold blue]")
+    # 2. Upload Model Card (accelerate_checkpoint/README.md)
+    model_card_path = os.path.join(args.checkpoint_dir, "README.md")
+    if os.path.exists(model_card_path):
+        console.print(f"[bold blue]📄 Syncing model card '{model_card_path}' to Hugging Face Hub...[/bold blue]")
         api.upload_file(
-            path_or_fileobj="README.md",
+            path_or_fileobj=model_card_path,
             path_in_repo="README.md",
             repo_id=args.repo_id,
-            commit_message="Sync repository documentation"
+            commit_message="Sync Hugging Face Hub model card"
         )
-        console.print("[bold green]✅ README.md synced successfully![/bold green]")
+        console.print("[bold green]✅ Model card synced successfully![/bold green]")
 
     if os.path.exists("metadata.yaml"):
         console.print("[bold blue]⚙️ Syncing metadata.yaml configuration...[/bold blue]")
