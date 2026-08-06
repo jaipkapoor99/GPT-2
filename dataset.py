@@ -7,9 +7,11 @@ embeddings require.
 
 import os
 import glob
+from bisect import bisect_right
+
 import torch
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 from config import UltronConfig
 
 class ZeroCopyShardedDataset(Dataset):
@@ -23,6 +25,7 @@ class ZeroCopyShardedDataset(Dataset):
         
         self.shard_memmaps = []
         self.shard_offsets = []
+        self.shard_ends = []
         total_sequences = 0
         
         for shard_path in self.bin_shards:
@@ -34,6 +37,7 @@ class ZeroCopyShardedDataset(Dataset):
             self.shard_memmaps.append((mmap, num_seqs))
             self.shard_offsets.append((total_sequences, total_sequences + num_seqs))
             total_sequences += num_seqs
+            self.shard_ends.append(total_sequences)
             
         self.total_sequences = total_sequences
 
@@ -41,21 +45,61 @@ class ZeroCopyShardedDataset(Dataset):
         return self.total_sequences
 
     def __getitem__(self, idx):
-        # Find shard using binary / offset range check
-        for shard_idx, (start_seq, end_seq) in enumerate(self.shard_offsets):
-            if start_seq <= idx < end_seq:
-                seq_idx_in_shard = idx - start_seq
-                token_start = seq_idx_in_shard * self.step
-                
-                # Convert the requested uint16 disk slice to int64 for embeddings.
-                mmap, _ = self.shard_memmaps[shard_idx]
-                chunk = mmap[token_start : token_start + self.T + 1].astype(np.int64)
-                
-                x = torch.from_numpy(chunk[:self.T])
-                y = torch.from_numpy(chunk[1:self.T + 1])
-                return x, y
-                
-        raise IndexError(f"Index {idx} out of range for dataset size {self.total_sequences}")
+        if idx < 0:
+            idx += self.total_sequences
+        if idx < 0 or idx >= self.total_sequences:
+            raise IndexError(f"Index {idx} out of range for dataset size {self.total_sequences}")
+
+        shard_idx = bisect_right(self.shard_ends, idx)
+        start_seq, _ = self.shard_offsets[shard_idx]
+        seq_idx_in_shard = idx - start_seq
+        token_start = seq_idx_in_shard * self.step
+
+        # Convert the requested uint16 disk slice to int64 for embeddings.
+        mmap, _ = self.shard_memmaps[shard_idx]
+        chunk = mmap[token_start : token_start + self.T + 1].astype(np.int64)
+
+        x = torch.from_numpy(chunk[:self.T])
+        y = torch.from_numpy(chunk[1:self.T + 1])
+        return x, y
+
+
+def split_train_dev_datasets(bin_shards, sequence_length, step=256):
+    """Create leakage-safe train/dev datasets.
+
+    Multiple-shard corpora are split at a shard boundary. A single-shard
+    corpus uses contiguous windows with a gap large enough to prevent the
+    train and validation windows from sharing tokens.
+    """
+    if len(bin_shards) >= 2:
+        train_shard_count = min(
+            len(bin_shards) - 1,
+            max(1, round(0.95 * len(bin_shards))),
+        )
+        train_ds = ZeroCopyShardedDataset(
+            bin_shards[:train_shard_count],
+            sequence_length=sequence_length,
+            step=step,
+        )
+        dev_ds = ZeroCopyShardedDataset(
+            bin_shards[train_shard_count:],
+            sequence_length=sequence_length,
+            step=step,
+        )
+        return train_ds, dev_ds
+
+    full_ds = ZeroCopyShardedDataset(
+        bin_shards,
+        sequence_length=sequence_length,
+        step=step,
+    )
+    split_index = int(0.95 * len(full_ds))
+    overlap_gap = (sequence_length + step - 1) // step
+    dev_start = min(len(full_ds), split_index + overlap_gap)
+    return (
+        Subset(full_ds, range(split_index)),
+        Subset(full_ds, range(dev_start, len(full_ds))),
+    )
 
 def get_dataloaders(config: UltronConfig, accelerator):
     bin_shards = sorted(glob.glob("shards/fineweb_shard_*.bin") + glob.glob("shards_edu/fineweb_edu_shard_*.bin"))
@@ -69,13 +113,19 @@ def get_dataloaders(config: UltronConfig, accelerator):
 
     accelerator.print(f"Loading {len(bin_shards)} binary shard(s) via memory mapping...")
     
-    full_ds = ZeroCopyShardedDataset(bin_shards, sequence_length=config.T, step=256)
-    accelerator.print(f"Total Sequences Available: {len(full_ds):,}")
-    
-    n_train = int(0.95 * len(full_ds))
-    n_dev   = len(full_ds) - n_train
-    
-    train_ds, dev_ds = torch.utils.data.random_split(full_ds, [n_train, n_dev])
+    train_ds, dev_ds = split_train_dev_datasets(
+        bin_shards,
+        sequence_length=config.T,
+        step=256,
+    )
+    if len(train_ds) == 0 or len(dev_ds) == 0:
+        raise ValueError(
+            "Dataset is too small for a leakage-safe train/dev split. "
+            "Provide at least two shards or a larger token file."
+        )
+    accelerator.print(
+        f"Sequences Available: {len(train_ds):,} train / {len(dev_ds):,} dev"
+    )
     
     train_loader = DataLoader(train_ds, batch_size=config.B, shuffle=True, num_workers=2, pin_memory=False)
     dev_loader   = DataLoader(dev_ds, batch_size=config.B, shuffle=False, num_workers=2, pin_memory=False)

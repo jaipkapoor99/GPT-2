@@ -14,6 +14,20 @@ from config import UltronConfig
 from model import UltronModel
 from dataset import get_dataloaders
 
+
+def build_config(args):
+    """Build a run configuration from parsed CLI arguments."""
+    config = UltronConfig.from_metadata()
+    config.is_test_mode = args.mode == "test"
+    if args.max_steps is not None:
+        if args.max_steps <= 0:
+            raise ValueError("--max-steps must be greater than zero")
+        config.max_steps = args.max_steps
+    elif args.mode == "test":
+        config.max_steps = 100
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description="Ultron (113M) Pre-training")
     parser.add_argument("--mode", type=str, choices=["fresh", "continue", "test"], default="continue", help="Training execution mode: 'fresh', 'continue' (default), or 'test'")
@@ -23,13 +37,10 @@ def main():
     if not any(k in os.environ for k in ["ACCELERATE_TORCH_DEVICE", "ACCELERATE_PROCESS_ID", "LOCAL_RANK", "ACCELERATE_MIXED_PRECISION"]):
         raise RuntimeError("train.py must be launched using HuggingFace Accelerate!\nRun: accelerate launch train.py [--mode=fresh|continue|test] [--max-steps=N]")
 
-    # Build configuration dynamically
-    config = UltronConfig.from_metadata()
-    if args.max_steps is not None:
-        config.max_steps = args.max_steps
-    elif args.mode == "test":
-        config.max_steps = 100
-        config.is_test_mode = True
+    try:
+        config = build_config(args)
+    except ValueError as error:
+        parser.error(str(error))
 
     from telemetry import UltronTelemetry
     accelerator = UltronTelemetry.setup_accelerator_trackers(config, args)

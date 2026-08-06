@@ -11,14 +11,15 @@ Large runtime artifacts are intentionally untracked: `shards_edu/`, `accelerate_
 ```bash
 uv venv --python 3.13 .venv
 source .venv/bin/activate
-uv pip install -r requirements.txt
+uv pip install torch==2.13.0
+uv pip install -r requirements.lock
 pytest -q
 ULTRON_TEST_COMPILE=1 pytest -q tests/test_model.py -k torch_compile
 accelerate launch train.py --mode=test
 accelerate launch scripts/generate.py --prompt "Hello"
 ```
 
-The standard test suite is CPU-safe. The compiler test is opt-in because it is slower and toolchain-dependent. `train.py --mode=test` exercises the training pipeline and requires prepared dataset shards; full training should run on a CUDA device with BF16 support.
+`requirements.lock` pins backend-neutral dependencies; install the appropriate PyTorch 2.13 wheel first. The standard test suite is CPU-safe. The compiler test is opt-in because it is slower and toolchain-dependent. `train.py --mode=test` exercises the training pipeline and requires prepared dataset shards; full training should run on a CUDA device with BF16 support.
 
 ## Coding Style & Naming Conventions
 

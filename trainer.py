@@ -27,6 +27,13 @@ class UltronTrainer:
         else:
             self.accelerator.print(msg)
 
+    def print_table_row(self, step: int, train_loss: float, dev_loss: float, lr: float):
+        """Print one compact evaluation summary through the telemetry UI."""
+        self.print_rich(
+            f"Step {step:,} | train loss {train_loss:.4f} | "
+            f"dev loss {dev_loss:.4f} | lr {lr:.3e}"
+        )
+
     def update_learning_rate(self):
         # WSD (Warmup-Stable-Linear-Decay) Learning Rate Schedule
         if self.step < self.config.warmup_steps:
@@ -91,18 +98,26 @@ class UltronTrainer:
         self.model.train()
 
     def save_checkpoint(self, final=False):
-        if getattr(self.config, "is_test_mode", False) or self.config.max_steps == 100:
+        if getattr(self.config, "is_test_mode", False):
             return
         # Save only the Accelerate training state (model weights, optimizer, etc.)
         self.accelerator.save_state(self.accelerate_dir)
+        self.accelerator.wait_for_everyone()
+
         # Persist the current step and wandb run ID so we can resume correctly
         state_payload = {"step": self.step, "max_steps": self.config.max_steps}
         run_id = self.telemetry.get_wandb_run_id()
         if run_id:
             state_payload["wandb_run_id"] = run_id
 
-        with open(os.path.join(self.accelerate_dir, "training_state.json"), "w") as f:
-            json.dump(state_payload, f, indent=2)
+        if self.accelerator.is_main_process:
+            state_file = os.path.join(self.accelerate_dir, "training_state.json")
+            temporary_state_file = f"{state_file}.tmp"
+            with open(temporary_state_file, "w") as f:
+                json.dump(state_payload, f, indent=2)
+            os.replace(temporary_state_file, state_file)
+        self.accelerator.wait_for_everyone()
+
         if final:
             self.print_rich("✓ Saved Accelerate checkpoint.")
 
@@ -115,7 +130,10 @@ class UltronTrainer:
         if self.step > 0:
             skip_count = (self.step * self.accelerator.gradient_accumulation_steps) % len(self.train_loader)
             self.print_rich(f"[bold yellow]⏩ Fast-forwarding dataset past {skip_count:,} batches...[/bold yellow]")
-            active_dataloader = self.train_loader
+            active_dataloader = self.accelerator.skip_first_batches(
+                self.train_loader,
+                skip_count,
+            )
         else:
             active_dataloader = self.train_loader
             
@@ -161,6 +179,7 @@ class UltronTrainer:
                             )
                         if is_eval_step:
                             self.evaluate(loss.item(), lr, eta_seconds=eta_seconds)
+            active_dataloader = self.train_loader
         
         self.telemetry.close()
         self.print_rich("\n[bold green]🎉 Pre-training Complete![/bold green]")

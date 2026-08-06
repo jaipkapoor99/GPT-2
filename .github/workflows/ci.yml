@@ -28,7 +28,9 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: requirements.txt
+          cache-dependency-glob: |
+            requirements.txt
+            requirements.lock
 
       - name: Install Python
         run: uv python install 3.13
@@ -41,7 +43,7 @@ jobs:
           uv pip install --python .venv/bin/python \
             torch==2.13.0 \
             --index-url https://download.pytorch.org/whl/cpu
-          uv pip install --python .venv/bin/python -r requirements.txt
+          uv pip install --python .venv/bin/python -r requirements.lock
 
       - name: Validate dependencies
         run: uv pip check --python .venv/bin/python

@@ -12,7 +12,7 @@ A high-performance PyTorch implementation of **Ultron-113M** pre-trained from sc
 
 > [!IMPORTANT]
 > **🚀 Pre-training Base Checkpoint Status Notice:**
-> The **100% pre-trained base model checkpoint** (`10.0 billion tokens`) is published on [Hugging Face](https://huggingface.co/jaipkapoor99/ultron-124m). It represents the raw foundational model before instruction tuning. Checkpoints and dataset shards are intentionally excluded from Git.
+> The **100% pre-trained base model checkpoint** (`10.0 billion tokens`) is published on [Hugging Face](https://huggingface.co/jaipkapoor99/ultron-113m). It represents the raw foundational model before instruction tuning. Checkpoints and dataset shards are intentionally excluded from Git.
 
 ---
 
@@ -149,16 +149,19 @@ ultron/
 ├── config.py               # Model & Hyperparameter Configuration Dataclass
 ├── dataset.py              # Memory-mapped sharded dataset loader
 ├── train.py                # Main Accelerated Distributed Training Runner
-├── trainer.py              # Trainer Class with Keller Jordan Muon + Fused AdamW
+├── trainer.py              # Training loop with PyTorch Muon + fused AdamW
 ├── telemetry.py            # Telemetry & Experiment Tracking Manager (W&B + ETA + Checkpoint state)
 ├── requirements.txt        # Virtual environment dependencies
+├── requirements.lock       # Reproducible backend-neutral dependency pins
 ├── accelerate_checkpoint/  # Saved Accelerate model weights, optimizer state & RNG seeds
 ├── shards_edu/             # Binary FineWeb-Edu tokenized data shards (.bin)
 ├── logs/                   # Dedicated logs directory (loss_curve.svg plot & benchmark JSON evaluations)
 ├── wandb/                  # Local step telemetry logs & experiment tracking runs
 ├── .agents/                # Agent-specific engineering principles
-├── tests/                  # CPU-safe pytest suite
-│   └── test_model.py       # Causality, cache, checkpoint, optimizer, and learning tests
+├── tests/                  # CPU-safe model, dataset, and training tests
+│   ├── test_dataset.py     # Shard lookup and leakage-safe split tests
+│   ├── test_model.py       # Causality, cache, optimizer, and learning tests
+│   └── test_training.py    # Evaluation, resume, and checkpoint-safety tests
 └── scripts/                # Helper Scripts
     ├── generate.py         # Text generation from local Accelerate checkpoint
     ├── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
@@ -171,7 +174,7 @@ ultron/
 
 ## 🤗 Hugging Face Repositories
 
-- **Model Checkpoint**: [`jaipkapoor99/ultron-124m`](https://huggingface.co/jaipkapoor99/ultron-124m)
+- **Model Checkpoint**: [`jaipkapoor99/ultron-113m`](https://huggingface.co/jaipkapoor99/ultron-113m)
 - **Pre-tokenized Dataset Shards**: [`jaipkapoor99/ultron-fineweb-edu-shards`](https://huggingface.co/datasets/jaipkapoor99/ultron-fineweb-edu-shards)
 
 ---
@@ -187,7 +190,10 @@ cd ultron
 # Fast environment setup using uv
 uv venv --python 3.13 .venv
 source .venv/bin/activate
-uv pip install -r requirements.txt
+
+# Install the PyTorch 2.13 wheel for your CUDA/CPU platform first
+uv pip install torch==2.13.0
+uv pip install -r requirements.lock
 
 # Optional: install if torch.compile cannot locate a CUDA compiler
 uv pip install nvidia-cuda-nvcc
@@ -242,7 +248,7 @@ Run the slower compiler smoke test explicitly:
 ULTRON_TEST_COMPILE=1 pytest -q tests/test_model.py -k torch_compile
 ```
 
-The workflow at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests to `master`. It installs Python 3.13, CPU-only PyTorch 2.13, validates dependencies, compiles the Python sources, and runs pytest. Full CUDA training and dataset-dependent evaluation remain local workflows.
+The workflow at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests to `master`. It installs Python 3.13, CPU-only PyTorch 2.13, installs the pinned dependency set, validates dependencies, compiles the Python sources, and runs pytest. Full CUDA training and dataset-dependent evaluation remain local workflows.
 
 ---
 
@@ -288,7 +294,7 @@ accelerate launch scripts/eval_lm_harness.py --limit=0
 
 > [!NOTE]
 > **Loss Trajectory & WSD Decay Analysis:**
-> During the final WSD linear-decay phase, the moving average `train_loss` dropped slightly below the validation `dev_loss`. Learning-rate annealing can contribute to this behavior, although the current randomly split overlapping windows limit how strongly the validation curve should be interpreted.
+> During the final WSD linear-decay phase, the moving average `train_loss` dropped slightly below the validation `dev_loss`. Learning-rate annealing can contribute to this behavior. These historical numbers came from the original randomly split overlapping windows and should therefore be interpreted cautiously; current training splits whole shards to prevent train/dev token overlap.
 
 ---
 
@@ -349,6 +355,7 @@ Building and pre-training Ultron-113M from scratch provided critical real-world 
 
 - **Rust Batch Tokenization Speedup**: Replacing Python `for`-loop tokenization with Rust `backend_tokenizer.encode_batch` (`num_threads=1` per worker process) increased dataset streaming speed by **>100x** from 40k tok/s to **~4.34 Million tokens/sec**!
 - **Bounded Sample Reads**: Pre-tokenizing into contiguous 100M-token `uint16` shards allows memory-mapped access while allocating only the requested window and its `int64` conversion during training.
+- **Leakage-Safe Validation**: Training and validation are split at shard boundaries, preventing overlapping token windows from crossing dataset partitions.
 
 ---
 
