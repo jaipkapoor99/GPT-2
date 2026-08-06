@@ -121,6 +121,8 @@ class UltronTelemetry:
         self._loss_history_steps: list[int] = []
         self._average_train_loss_history: list[float] = []
         self._dev_loss_history: list[float] = []
+        self.best_dev_loss = float("inf")
+        self.best_average_train_loss = float("inf")
 
     @classmethod
     def setup_accelerator_trackers(
@@ -168,7 +170,44 @@ class UltronTelemetry:
             init_kwargs={"wandb": wandb_options},
         )
         cls._define_wandb_metrics(accelerator)
+        cls._initialize_wandb_summary(config, accelerator)
         return accelerator
+
+    @staticmethod
+    def _wandb_run(accelerator: Accelerator):
+        if not accelerator.is_main_process:
+            return None
+        return accelerator.get_tracker("wandb", unwrap=True)
+
+    @classmethod
+    def _initialize_wandb_summary(cls, config, accelerator: Accelerator) -> None:
+        """Populate immutable run totals before the first metric is logged."""
+        try:
+            run = cls._wandb_run(accelerator)
+            if run is None:
+                return
+            tokens_per_step = (
+                config.B
+                * accelerator.gradient_accumulation_steps
+                * config.T
+                * accelerator.num_processes
+            )
+            run.summary.update(
+                {
+                    "training/status": "running",
+                    "training/current_step": 0,
+                    "training/total_steps": config.max_steps,
+                    "training/tokens_per_step": tokens_per_step,
+                    "training/tokens_processed": 0,
+                    "training/total_tokens": tokens_per_step * config.max_steps,
+                    "training/progress_percent": 0.0,
+                }
+            )
+        except (AttributeError, KeyError, RuntimeError, ValueError) as error:
+            warnings.warn(
+                f"W&B summary could not be initialized: {error}",
+                stacklevel=2,
+            )
 
     @staticmethod
     def _define_wandb_metrics(accelerator: Accelerator) -> None:
@@ -218,8 +257,7 @@ class UltronTelemetry:
         if not self.accelerator.is_main_process:
             return None
         try:
-            tracker = self.accelerator.get_tracker("wandb", unwrap=True)
-            run = getattr(tracker, "run", None)
+            run = self._wandb_run(self.accelerator)
             return getattr(run, "id", None)
         except (KeyError, RuntimeError, AttributeError) as error:
             if not self._tracker_warning_emitted:
@@ -308,6 +346,38 @@ class UltronTelemetry:
             self.STEPS_PER_SECOND_METRIC: self.last_steps_per_sec,
         }
 
+    def _update_wandb_summary(self, values: Mapping[str, Any]) -> None:
+        """Update summary-only values without creating dashboard time series."""
+        if not self.accelerator.is_main_process:
+            return
+        try:
+            run = self._wandb_run(self.accelerator)
+            if run is not None:
+                run.summary.update(dict(values))
+        except (AttributeError, KeyError, RuntimeError, ValueError) as error:
+            if not self._tracker_warning_emitted:
+                warnings.warn(
+                    f"W&B summary could not be updated: {error}",
+                    stacklevel=2,
+                )
+                self._tracker_warning_emitted = True
+
+    def _live_summary(
+        self,
+        step: int,
+        loss: float,
+        lr: float,
+    ) -> dict[str, float | int]:
+        return {
+            "training/current_step": step,
+            "training/tokens_processed": step * self.global_tokens_per_step,
+            "training/progress_percent": 100.0 * step / self.config.max_steps,
+            "latest/train_loss": loss,
+            "latest/learning_rate": lr,
+            "latest/tokens_per_sec": self.last_throughput,
+            "latest/steps_per_sec": self.last_steps_per_sec,
+        }
+
     def _record_train_loss(self, loss: float) -> None:
         if math.isfinite(loss):
             self._train_loss_total += loss
@@ -364,6 +434,7 @@ class UltronTelemetry:
             # dashboard renders a continuous, explicitly sampled dev-loss line.
             metrics[self.DEV_LOSS_METRIC] = self.last_dev_loss
         self.log_step(metrics, step)
+        self._update_wandb_summary(self._live_summary(step, loss, lr))
 
     def log_evaluation(
         self,
@@ -379,6 +450,11 @@ class UltronTelemetry:
         self._loss_history_steps.append(step)
         self._average_train_loss_history.append(average_train_loss)
         self._dev_loss_history.append(dev_loss)
+        self.best_dev_loss = min(self.best_dev_loss, dev_loss)
+        self.best_average_train_loss = min(
+            self.best_average_train_loss,
+            average_train_loss,
+        )
 
         metrics = {
             self.DEV_LOSS_METRIC: dev_loss,
@@ -392,6 +468,16 @@ class UltronTelemetry:
         if comparison_chart is not None:
             metrics[self.LOSS_COMPARISON_CHART] = comparison_chart
         self.log_step(metrics, step)
+        self._update_wandb_summary(
+            {
+                **self._live_summary(step, train_loss, lr),
+                "latest/average_train_loss": average_train_loss,
+                "latest/dev_loss": dev_loss,
+                "best/average_train_loss": self.best_average_train_loss,
+                "best/dev_loss": self.best_dev_loss,
+                "validation/evaluations": len(self._dev_loss_history),
+            }
+        )
 
 
 class TokenizationTelemetry:

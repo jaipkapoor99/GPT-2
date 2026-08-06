@@ -41,10 +41,14 @@ class FakeAccelerator:
 class FakeMainAccelerator(FakeAccelerator):
     is_main_process = True
 
+    def __init__(self):
+        super().__init__()
+        self.run = SimpleNamespace(id="run-123", summary={})
+
     def get_tracker(self, name, unwrap=False):
         assert name == "wandb"
         assert unwrap is True
-        return SimpleNamespace(run=SimpleNamespace(id="run-123"))
+        return self.run
 
 
 def test_fresh_wandb_run_name_starts_with_timestamp(monkeypatch):
@@ -175,6 +179,28 @@ def test_wandb_run_id_uses_unwrapped_tracker():
     telemetry = UltronTelemetry(config, FakeMainAccelerator())
 
     assert telemetry.get_wandb_run_id() == "run-123"
+
+
+def test_wandb_summary_contains_run_totals_and_live_results(monkeypatch):
+    accelerator = FakeMainAccelerator()
+    config = SimpleNamespace(B=2, T=10, max_steps=20)
+    UltronTelemetry._initialize_wandb_summary(config, accelerator)
+    telemetry = UltronTelemetry(config, accelerator)
+    monkeypatch.setattr(telemetry, "_build_loss_comparison_chart", lambda: None)
+    telemetry.last_throughput = 240
+    telemetry.last_steps_per_sec = 1
+
+    telemetry.log_training_step(step=1, loss=3.5, lr=1e-3)
+    telemetry.log_evaluation(step=2, train_loss=3.0, dev_loss=2.5, lr=9e-4)
+
+    assert accelerator.run.summary["training/total_steps"] == 20
+    assert accelerator.run.summary["training/total_tokens"] == 4_800
+    assert accelerator.run.summary["training/current_step"] == 2
+    assert accelerator.run.summary["training/tokens_processed"] == 480
+    assert accelerator.run.summary["latest/train_loss"] == 3.0
+    assert accelerator.run.summary["latest/dev_loss"] == 2.5
+    assert accelerator.run.summary["best/dev_loss"] == 2.5
+    assert accelerator.run.summary["validation/evaluations"] == 1
 
 
 def test_tokenization_eta_and_validation():
