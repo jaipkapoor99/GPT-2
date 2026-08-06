@@ -1,7 +1,7 @@
 """
-scripts/eval_lm_harness.py — Official lm-evaluation-harness Evaluator for Ultron (124M)
+scripts/eval_lm_harness.py — lm-evaluation-harness evaluator for Ultron (113M)
 
-Evaluates the Ultron (124M) base checkpoint using EleutherAI's `lm-evaluation-harness` across:
+Evaluates the Ultron (113M) base checkpoint using EleutherAI's `lm-evaluation-harness` across:
 - `arc_easy`
 - `hellaswag`
 - `mmlu`
@@ -20,9 +20,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from accelerate import Accelerator
 from config import UltronConfig
-from model import UltronModel
+from model import UltronModel, load_ultron_state_dict
 from transformers import AutoTokenizer
-import lm_eval
 from lm_eval.models.huggingface import HFLM
 from lm_eval.evaluator import simple_evaluate
 
@@ -52,8 +51,9 @@ def load_base_model(checkpoint_dir: str, config: UltronConfig) -> UltronModel:
     else:
         state_dict = torch.load(weight_file, map_location=accelerator.device, weights_only=True)
 
-    cleaned = {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
-    model.load_state_dict(cleaned, strict=False)
+    missing, _ = load_ultron_state_dict(model, state_dict)
+    if missing:
+        accelerator.print(f"Expected tied-weight alias omitted from checkpoint: {missing}")
     model.to(accelerator.device)
     model.eval()
     return model

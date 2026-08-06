@@ -1,5 +1,5 @@
 """
-Ultron (124M) Pre-training Script (2026 SOTA)
+Ultron (113M) pre-training script
 
 Usage:
     accelerate launch train.py [--mode=fresh|continue|test] [--max-steps=N]
@@ -8,7 +8,6 @@ Usage:
 import argparse
 import os
 import torch
-from accelerate import Accelerator
 
 
 from config import UltronConfig
@@ -16,7 +15,7 @@ from model import UltronModel
 from dataset import get_dataloaders
 
 def main():
-    parser = argparse.ArgumentParser(description="Ultron (124M) Pre-training")
+    parser = argparse.ArgumentParser(description="Ultron (113M) Pre-training")
     parser.add_argument("--mode", type=str, choices=["fresh", "continue", "test"], default="continue", help="Training execution mode: 'fresh', 'continue' (default), or 'test'")
     parser.add_argument("--max-steps", type=int, default=None, help="Optional max training steps override (e.g. --max-steps=1000)")
     args = parser.parse_args()
@@ -66,4 +65,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -16,7 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from accelerate import Accelerator
 from config import UltronConfig
-from model import UltronModel
+from model import UltronModel, load_ultron_state_dict
 
 # ── Accelerate guard ────────────────────────────────────────────────────────
 if not any(k in os.environ for k in [
@@ -52,17 +52,11 @@ def load_model_weights(model: UltronModel, checkpoint_dir: str) -> UltronModel:
     else:
         state_dict = torch.load(weight_file, map_location=accelerator.device, weights_only=True)
 
-    # Strip _orig_mod. prefix inserted by torch.compile
-    cleaned = {}
-    for k, v in state_dict.items():
-        new_key = k.removeprefix("_orig_mod.")
-        cleaned[new_key] = v
-
-    missing, unexpected = model.load_state_dict(cleaned, strict=False)
+    missing, unexpected = load_ultron_state_dict(model, state_dict)
     if missing:
-        accelerator.print(f"  Missing keys  : {len(missing)}")
+        accelerator.print(f"  Expected tied-weight alias omitted: {missing}")
     if unexpected:
-        accelerator.print(f"  Unexpected    : {len(unexpected)}")
+        accelerator.print(f"  Unexpected keys: {unexpected}")
 
     return model
 

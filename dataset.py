@@ -1,8 +1,8 @@
-"""
-Zero-Copy Direct Slicing Dataset Module
-Eliminates ALL memory allocations by performing direct index offset slicing
-on memmapped numpy uint16 files.
-RAM Usage: 0.00 MB!
+"""Memory-mapped sharded token dataset.
+
+Shards remain on disk and each sample allocates only the requested token
+window while converting uint16 token IDs to the int64 dtype PyTorch
+embeddings require.
 """
 
 import os
@@ -14,9 +14,7 @@ from config import UltronConfig
 
 class ZeroCopyShardedDataset(Dataset):
     """
-    True Zero-Copy Memmap Dataset
-    Calculates exact token offset math and reads only 1,025 tokens per sample directly from disk.
-    Zero RAM allocation, zero tensor copying, zero memory fragmentation!
+    Memory-mapped dataset that reads one token window per sample.
     """
     def __init__(self, bin_shards, sequence_length=1024, step=256):
         self.bin_shards = bin_shards
@@ -31,7 +29,7 @@ class ZeroCopyShardedDataset(Dataset):
             num_tokens = os.path.getsize(shard_path) // 2 # uint16 = 2 bytes
             num_seqs = max(0, (num_tokens - (self.T + 1)) // self.step + 1)
             
-            # Virtual disk view - 0 bytes of RAM
+            # Virtual disk view; sample conversion happens in __getitem__.
             mmap = np.memmap(shard_path, dtype=np.uint16, mode='r')
             self.shard_memmaps.append((mmap, num_seqs))
             self.shard_offsets.append((total_sequences, total_sequences + num_seqs))
@@ -49,7 +47,7 @@ class ZeroCopyShardedDataset(Dataset):
                 seq_idx_in_shard = idx - start_seq
                 token_start = seq_idx_in_shard * self.step
                 
-                # Zero-copy disk slice (1,025 uint16 tokens -> int64 tensor)
+                # Convert the requested uint16 disk slice to int64 for embeddings.
                 mmap, _ = self.shard_memmaps[shard_idx]
                 chunk = mmap[token_start : token_start + self.T + 1].astype(np.int64)
                 
@@ -69,7 +67,7 @@ def get_dataloaders(config: UltronConfig, accelerator):
             raise FileNotFoundError("No binary dataset shards found! Run 'python tokenize_dataset.py' first.")
 
 
-    accelerator.print(f"Loading {len(bin_shards)} binary shard(s) via Zero-Copy Memmap Dataset...")
+    accelerator.print(f"Loading {len(bin_shards)} binary shard(s) via memory mapping...")
     
     full_ds = ZeroCopyShardedDataset(bin_shards, sequence_length=config.T, step=256)
     accelerator.print(f"Total Sequences Available: {len(full_ds):,}")

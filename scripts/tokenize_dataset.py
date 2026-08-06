@@ -2,7 +2,6 @@ import os
 import sys
 import json
 import glob
-import time
 import signal
 import numpy as np
 from transformers import AutoTokenizer

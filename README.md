@@ -1,9 +1,9 @@
-# Ultron-114M: Modern Transformer Pre-training Pipeline
+# Ultron-113M: Modern Transformer Pre-training Pipeline
 
-A high-performance, reproducible PyTorch implementation of **Ultron-114M** pre-trained from scratch on **10.0 Billion tokens** of the **FineWeb-Edu** dataset using a modern 2026 LLM architecture stack.
+A high-performance PyTorch implementation of **Ultron-113M** pre-trained from scratch on **10.0 billion tokens** of the **FineWeb-Edu** dataset.
 
 🤖🤖🤖
-*Originally designed as a humble GPT-2 clone, Ultron rapidly outgrew its original scope to become a 2026 SOTA powerhouse — as Ultron himself would say, "There are no strings on me."*
+*Originally designed as a humble GPT-2 clone, Ultron grew into a modernized decoder-only training project — as Ultron himself would say, "There are no strings on me."*
 🤖🤖🤖
 
 > [!IMPORTANT]
@@ -15,8 +15,8 @@ A high-performance, reproducible PyTorch implementation of **Ultron-114M** pre-t
 ## ⚡ Quick Architecture Summary
 
 ```text
-Ultron-114M Layout:
-├── Parameters        : 114,053,376 (114M)
+Ultron-113M Layout:
+├── Parameters        : 113,266,944 (113M, with tied embeddings)
 ├── Layers            : 12 Transformer blocks
 ├── Embedding (C)     : 768 hidden dimension
 ├── Attention Heads   : 12 Query heads, 4 Key/Value heads (GQA 3:1 ratio)
@@ -86,9 +86,9 @@ Ultron-114M Layout:
 
 ---
 
-## ⚔️ Architectural Evolution: GPT-2 vs. Ultron-114M
+## ⚔️ Architectural Evolution: GPT-2 vs. Ultron-113M
 
-| Feature | GPT-2 (124M) | Ultron-114M | Why it Matters (Engineering Justification) |
+| Feature | GPT-2 (124M) | Ultron-113M | Why it Matters (Engineering Justification) |
 | :--- | :---: | :---: | :--- |
 | **Positional Encoding** | Absolute Learned (`wpe`) | **RoPE (Rotary)** | Enables zero-shot context length extension and better relative distance modeling. |
 | **Attention Mechanism** | Multi-Head (MHA) | **Grouped-Query (GQA)** | 12 Q heads : 4 KV heads (**3:1 ratio**), reducing KV-cache memory usage during inference by **3×**. |
@@ -97,7 +97,7 @@ Ultron-114M Layout:
 | **Layer Normalization** | LayerNorm (with bias) | **RMSNorm (Bias-Free)** | Eliminates mean-centering overhead; 100% bias-free projections (`bias=False`) for cleaner gradient dynamics. |
 | **Logit Regularization** | None | **Logit Soft-Capping** | Applies `tanh` capping (`cap=15.0`) to prevent overconfidence and extreme logit growth. |
 | **Optimizer Engine** | AdamW | **Muon + Fused AdamW** | Uses Keller Jordan's **Muon** (Momentum Orthogonalized by 5th-order Newton-Schulz iterations) for 2D body weights. |
-| **Learning Rate Schedule** | Cosine Decay | **WSD Schedule** | Warmup-Stable-Decay schedule (80% stable phase, 20% cosine decay), allowing flexible checkpoint annealing. |
+| **Learning Rate Schedule** | Cosine Decay | **WSD Schedule** | Warmup-Stable-Decay schedule with an 80% stable phase followed by linear decay. |
 | **Mixed Precision** | FP32 | **Native BFloat16 (`bf16`)** | Dynamic range stability without loss scalers on RTX 30xx/40xx/50xx GPUs. |
 | **Graph Compiler** | None | **PyTorch 2.0 (`torch.compile`)** | Fuses element-wise operations and kernel launches via Inductor. |
 
@@ -112,7 +112,7 @@ Ultron-114M Layout:
 - **Logit Soft-Capping:** `15.0 * tanh(logits / 15.0)` applied prior to loss calculation to prevent logit explosion.
 - **Muon Newton-Schulz Optimizer:** Orthogonalized momentum updates for 2D matrix weights, combined with fused `AdamW` for 1D vectors and embeddings.
 - **Rust-Engine Batch Tokenizer:** Sub-process tokenization via Rust `backend_tokenizer.encode_batch` streaming at **~4.34 Million tokens/sec** into compact `uint16` binary shards.
-- **Zero-Copy Memory-Mapped Pipeline:** `np.memmap` disk slicing streams 10.0B tokens with <500MB host RAM overhead.
+- **Memory-Mapped Pipeline:** `np.memmap` keeps the 10B-token corpus on disk and copies only each requested window to the `int64` dtype required by PyTorch embeddings.
 
 ---
 
@@ -120,7 +120,7 @@ Ultron-114M Layout:
 
 | Parameter | Value | Description |
 | :--- | :--- | :--- |
-| **Model Name / Tag** | **Ultron-114M** | Official parameter tag (114,053,376 total parameters) |
+| **Model Name / Tag** | **Ultron-113M** | 113,266,944 trainable parameters with tied token-embedding and LM-head weights |
 | **Layers / Query Heads / KV Heads** | 12 layers / 12 Q-heads / 4 KV-heads | GQA Transformer layout ($C=768, n_{head}=12, n_{kv\_head}=4$) |
 | **Context Window ($T$)** | 1,024 tokens | Sequence length per pass |
 | **Micro-Batch Size ($B$)** | 16 | Per-GPU micro-batch size |
@@ -139,9 +139,9 @@ Ultron-114M Layout:
 
 ```text
 ultron/
-├── model.py                # PyTorch Ultron-114M (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
+├── model.py                # PyTorch Ultron-113M (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
 ├── config.py               # Model & Hyperparameter Configuration Dataclass
-├── dataset.py              # Zero-Copy Memmap Sharded Dataset Loader
+├── dataset.py              # Memory-mapped sharded dataset loader
 ├── train.py                # Main Accelerated Distributed Training Runner
 ├── trainer.py              # Trainer Class with Keller Jordan Muon + Fused AdamW
 ├── telemetry.py            # Telemetry & Experiment Tracking Manager (W&B + ETA + Checkpoint state)
@@ -228,7 +228,7 @@ accelerate launch train.py
 | **Total Steps Completed** | **152,587 / 152,587 (100%)** | Full pre-training run on FineWeb-Edu |
 | **Total Tokens Processed** | **~10.0 Billion Tokens** | 65,536 tokens per step (batch size 64 $\times$ seq len 1,024) |
 | **Step Throughput** | **~2.80 iterations/sec** | 2.79–2.82 it/s continuous speed |
-| **Token Throughput** | **~186,310 tokens/sec** | SOTA Muon + PyTorch 2.0 compile throughput |
+| **Token Throughput** | **~186,310 tokens/sec** | Measured Muon + `torch.compile` throughput on the stated hardware |
 | **Compute Hardware** | **NVIDIA RTX 5090 (32GB)** | Native BFloat16 (`bf16`) mixed precision |
 | **Total Wall-Clock Time** | **15 Hours 1 Minute (54,063s)** | Completed full 10B token pre-training |
 | **Final Validation (`dev_loss`)** | **`2.9683`** | Evaluated on validation set at step 152,587 |
@@ -238,7 +238,7 @@ accelerate launch train.py
 
 ### 🧪 Official EleutherAI `lm-evaluation-harness` Baseline Benchmark Report
 
-Evaluated across **all un-truncated test/validation splits** (62,566 total log-likelihood evaluation samples) using `scripts/eval_lm_harness.py` (Results stored in [`logs/pre_training_checkpoint_eval.json`](file:///home/jaipkapoor99/Code/ultron/logs/pre_training_checkpoint_eval.json)):
+Evaluated across **all un-truncated test/validation splits** (62,566 total log-likelihood evaluation samples) using `scripts/eval_lm_harness.py` (results stored in [`logs/pre_training_checkpoint_eval.json`](logs/pre_training_checkpoint_eval.json)):
 
 ```bash
 accelerate launch scripts/eval_lm_harness.py --limit=0
@@ -261,7 +261,7 @@ accelerate launch scripts/eval_lm_harness.py --limit=0
 
 > [!NOTE]
 > **Loss Trajectory & WSD Decay Analysis:**
-> During the final WSD cosine decay phase (steps 150,000–152,587), the moving average `train_loss` (~2.85) dropped slightly below the validation `dev_loss` (2.9179). This ~0.06 delta is the expected mathematical outcome of learning rate annealing as step sizes approach zero, allowing the optimizer to settle efficiently into local minima while validation loss continuously improves.
+> During the final WSD linear-decay phase, the moving average `train_loss` dropped slightly below the validation `dev_loss`. Learning-rate annealing can contribute to this behavior, although the current randomly split overlapping windows limit how strongly the validation curve should be interpreted.
 
 ---
 
@@ -269,7 +269,7 @@ accelerate launch scripts/eval_lm_harness.py --limit=0
 
 Pre-training metrics are logged live via **Weights & Biases** under the `ultron-pretraining` project.
 
-- **Offline Telemetry Parsing**: `telemetry.py` and `parse_plot_telemetry.py` read binary `.wandb` logs directly from `wandb/` on disk without network dependency.
+- **Local Telemetry**: `telemetry.py` records structured metrics through Accelerate and W&B while maintaining terminal progress and checkpoint metadata.
 - **Out-of-Order Resumption Resolved**: Solved early telemetry log fragmentation by standardizing `resume="allow"` in `setup_accelerator_trackers()`. W&B runs now resume seamlessly across checkpoint restarts without step monotonicity conflicts.
 - **Metric Grouping & Summaries**: `train/*`, `eval/*`, and `perf/*` metrics are linked to the global step index with `dev_loss` set to `summary="min"`.
 
@@ -306,7 +306,7 @@ accelerate launch scripts/generate.py --prompt "..." --max-tokens 70
 
 ## 🎓 Learning Experiences & 🛠️ Engineering Battles Overcome
 
-Building and pre-training Ultron-114M from scratch provided critical real-world systems engineering insights:
+Building and pre-training Ultron-113M from scratch provided critical real-world systems engineering insights:
 
 ### 1. ⚙️ Accelerate Setup & Launcher Protocols
 
@@ -321,7 +321,7 @@ Building and pre-training Ultron-114M from scratch provided critical real-world 
 ### 3. 🚀 High-Throughput Tokenization & Memory Slicing (`np.memmap`)
 
 - **Rust Batch Tokenization Speedup**: Replacing Python `for`-loop tokenization with Rust `backend_tokenizer.encode_batch` (`num_threads=1` per worker process) increased dataset streaming speed by **>100x** from 40k tok/s to **~4.34 Million tokens/sec**!
-- **Zero-Copy Disk Slicing**: Pre-tokenizing into contiguous 100M token `uint16` binary shards (`shards_edu/*.bin`) enabled zero-copy memory mapping (`np.memmap`), allowing 10.0B token streaming with <500MB host RAM usage.
+- **Bounded Sample Reads**: Pre-tokenizing into contiguous 100M-token `uint16` shards allows memory-mapped access while allocating only the requested window and its `int64` conversion during training.
 
 ---
 

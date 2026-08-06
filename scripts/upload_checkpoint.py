@@ -1,5 +1,5 @@
 """
-Ultron (124M) Checkpoint Uploader Script
+Ultron (113M) checkpoint uploader script
 
 Uploads the local `accelerate_checkpoint/` directory and documentation to Hugging Face Hub.
 
@@ -9,7 +9,6 @@ Usage:
 
 import os
 import argparse
-from pathlib import Path
 from rich.console import Console
 from huggingface_hub import HfApi, login
 
@@ -49,7 +48,7 @@ def main():
         folder_path=args.checkpoint_dir,
         repo_id=args.repo_id,
         repo_type="model",
-        commit_message="Upload Ultron 124M Accelerate checkpoint weights and state"
+        commit_message="Upload Ultron 113M Accelerate checkpoint weights and state"
     )
     console.print("[bold green]✅ Checkpoint files uploaded successfully![/bold green]")
 

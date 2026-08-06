@@ -1,8 +1,6 @@
 import os
 import json
-import shutil
 import torch
-import time
 from accelerate import Accelerator
 from telemetry import UltronTelemetry
 
@@ -28,15 +26,6 @@ class UltronTrainer:
             self.telemetry.print_message(msg)
         else:
             self.accelerator.print(msg)
-
-    def print_table_header(self):
-        pass
-
-    def print_table_row(self, step, train_loss, dev_loss, lr):
-        pass
-
-    def print_table_footer(self):
-        pass
 
     def update_learning_rate(self):
         # WSD (Warmup-Stable-Linear-Decay) Learning Rate Schedule
@@ -73,17 +62,27 @@ class UltronTrainer:
 
     def evaluate(self, train_loss, lr, eta_seconds=0):
         self.model.eval()
-        total_dev_loss = 0.0
+        total_dev_loss = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
+        total_dev_tokens = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
         dev_batches = 0
         with torch.no_grad():
             for xb_dev, yb_dev in self.dev_loader:
                 dev_out = self.model(xb_dev, yb_dev)
                 dev_loss = dev_out.loss if (hasattr(dev_out, "loss") and dev_out.loss is not None) else dev_out[1]
-                total_dev_loss += dev_loss.item()
+                token_count = yb_dev.numel()
+                total_dev_loss += dev_loss.detach().double() * token_count
+                total_dev_tokens += token_count
                 dev_batches += 1
                 if dev_batches >= 20:
                     break
-        avg_dev_loss = total_dev_loss / dev_batches
+
+        totals = self.accelerator.reduce(
+            torch.stack((total_dev_loss, total_dev_tokens)),
+            reduction="sum",
+        )
+        if totals[1].item() == 0:
+            raise RuntimeError("Validation dataloader produced no tokens")
+        avg_dev_loss = (totals[0] / totals[1]).item()
 
         self.print_table_row(self.step, train_loss, avg_dev_loss, lr)
         # Log train_loss and dev_loss together at the same step

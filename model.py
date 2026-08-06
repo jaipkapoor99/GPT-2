@@ -1,15 +1,14 @@
 """
-Ultron (124M) PyTorch Model Module (2026 SOTA Standards)
+Ultron (113M) PyTorch Model Module
 Implements:
-1. FlashAttention-2 (F.scaled_dot_product_attention) with smart context enforcement
+1. PyTorch scaled-dot-product attention with automatic backend selection
 2. SwiGLU Gated FeedForward Network (LLaMA 3 / Qwen 2.5 architecture)
 3. Pre-LayerNorm Residual Skip Connections
 4. Weight Tying (lm_head.weight = wte.weight)
 5. 1 / sqrt(2*N) Residual Parameter Initialization
-6. Pre-trained weight loader from official OpenAI weights
-7. KV Caching for O(N) autoregressive generation
-8. Zero-Copy Grouped-Query Attention (GQA)
-9. Vocab Size padding (multiple of 64) for Tensor Cores
+6. KV Caching for efficient autoregressive generation
+7. Grouped-Query Attention (GQA)
+8. Vocab Size padding (multiple of 64) for Tensor Cores
 """
 
 import math
@@ -32,6 +31,30 @@ class UltronOutput:
     logits: torch.Tensor
     loss: Optional[torch.Tensor] = None
     past_key_values: Optional[Tuple] = None
+
+
+def load_ultron_state_dict(model: "UltronModel", state_dict: dict):
+    """Load an Ultron checkpoint and reject incompatible key sets.
+
+    Safetensors stores only one copy of tied parameters, so exactly one of the
+    embedding/LM-head aliases may be absent. Every other missing or unexpected
+    key is treated as an incompatible checkpoint.
+    """
+    cleaned = {key.removeprefix("_orig_mod."): value for key, value in state_dict.items()}
+    incompatible = model.load_state_dict(cleaned, strict=False)
+    missing = set(incompatible.missing_keys)
+    unexpected = set(incompatible.unexpected_keys)
+    tied_aliases = {"transformer.wte.weight", "lm_head.weight"}
+
+    invalid_missing = missing - tied_aliases
+    if invalid_missing or unexpected or len(missing & tied_aliases) > 1:
+        raise RuntimeError(
+            "Incompatible Ultron checkpoint: "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+
+    model.tie_weights()
+    return sorted(missing), sorted(unexpected)
 
 def _find_free_port():
     """Find a free TCP port on localhost to avoid EADDRINUSE crashes."""
@@ -73,7 +96,7 @@ class RotaryEmbedding(nn.Module):
         return self.cos_cached[:, :, offset:seq_len+offset, :], self.sin_cached[:, :, offset:seq_len+offset, :]
 
 class CausalSelfAttention(nn.Module):
-    """ High-performance Grouped-Query Attention (GQA) with RoPE using PyTorch FlashAttention """
+    """Grouped-Query Attention with RoPE using PyTorch SDPA."""
     def __init__(self, config: UltronConfig):
         super().__init__()
         assert config.C % config.n_head == 0
@@ -126,14 +149,14 @@ class CausalSelfAttention(nn.Module):
         new_past_key_value = (k, v)
 
         if self.num_queries_per_kv > 1:
-            # Zero-Copy GQA expansion using unsqueeze/expand/reshape instead of repeat_interleave
+            # Expand GQA heads without repeat_interleave.
             k_len = k.size(2)
             k = k.unsqueeze(2).expand(B, self.n_kv_head, self.num_queries_per_kv, k_len, self.head_dim).reshape(B, self.n_head, k_len, self.head_dim)
             v = v.unsqueeze(2).expand(B, self.n_kv_head, self.num_queries_per_kv, k_len, self.head_dim).reshape(B, self.n_head, k_len, self.head_dim)
             
         dropout_p = self.dropout_p if self.training else 0.0
         
-        # Efficient Scaled Dot-Product Attention (PyTorch automatically selects optimal FlashAttention/CuDNN kernel)
+        # PyTorch selects the best available SDPA backend for the device and dtype.
         is_causal = self.training or q.size(2) > 1
         y = F.scaled_dot_product_attention(q, k, v, is_causal=is_causal, dropout_p=dropout_p)
 
@@ -167,7 +190,7 @@ class RMSNorm(nn.Module):
         return output * self.weight
 
 class Block(nn.Module):
-    """ Transformer Block: Communication (FlashAttention) + Computation (SwiGLU MLP) """
+    """Transformer block with SDPA attention and a SwiGLU MLP."""
     def __init__(self, config: UltronConfig):
         super().__init__()
         self.ln_1 = RMSNorm(config.C)
@@ -182,7 +205,7 @@ class Block(nn.Module):
         return x, present_key_value
 
 class UltronModel(nn.Module):
-    """ Full Ultron (124M) Language Model Class with RMSNorm, RoPE, & GQA """
+    """Full Ultron (113M) language model with RMSNorm, RoPE, and GQA."""
     def __init__(self, config: UltronConfig):
         super().__init__()
         self.config = config
@@ -277,9 +300,10 @@ class UltronModel(nn.Module):
                 world_size=1,
                 init_method=f"tcp://127.0.0.1:{port}"
             )
-        muon_params = [p for name, p in self.named_parameters() if p.ndim == 2 and 'wte' not in name]
-        adamw_decay_params = [p for name, p in self.named_parameters() if p.ndim < 2 and 'wte' not in name and p.requires_grad]
-        adamw_nodecay_params = [p for name, p in self.named_parameters() if 'wte' in name and p.requires_grad]
+        partitions = self.partition_optimizer_parameters()
+        muon_params = partitions["muon"]
+        adamw_decay_params = partitions["adamw_decay"]
+        adamw_nodecay_params = partitions["adamw_nodecay"]
         
         adamw_groups = [
             {"params": adamw_decay_params, "weight_decay": 0.1},
@@ -289,6 +313,24 @@ class UltronModel(nn.Module):
         optimizer_muon = Muon(muon_params, lr=0.04, momentum=0.95)
         optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=learning_rate, betas=(0.9, 0.95), fused=True)
         return optimizer_muon, optimizer_adamw
+
+    def partition_optimizer_parameters(self):
+        """Assign every trainable parameter to exactly one optimizer group."""
+        partitions = {
+            "muon": [],
+            "adamw_decay": [],
+            "adamw_nodecay": [],
+        }
+        for name, parameter in self.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            if name == "transformer.wte.weight":
+                partitions["adamw_nodecay"].append(parameter)
+            elif parameter.ndim == 2:
+                partitions["muon"].append(parameter)
+            else:
+                partitions["adamw_decay"].append(parameter)
+        return partitions
 
     @torch.no_grad()
     def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: Optional[int] = None):
@@ -322,4 +364,3 @@ class UltronModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
             
         return idx
-

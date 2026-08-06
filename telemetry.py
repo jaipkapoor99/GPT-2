@@ -1,5 +1,5 @@
 """
-Ultron Telemetry Module (2026 SOTA)
+Ultron telemetry module
 
 Encapsulates W&B tracking, live terminal progress meters, ETA calculations,
 metrics summary definitions, and checkpoint state telemetry resolution.
@@ -8,7 +8,6 @@ metrics summary definitions, and checkpoint state telemetry resolution.
 import os
 import json
 import time
-import shutil
 import dataclasses
 from typing import Dict, Any, Optional
 from accelerate import Accelerator

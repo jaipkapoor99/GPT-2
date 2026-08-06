@@ -1,12 +1,9 @@
 """
 Ultron Configuration Module
-Contains dataclass parameters for the 2026-standard Ultron (124M) architecture.
-All hyper-parameter fields have sensible 2026 SOTA defaults.
+Contains dataclass parameters for the Ultron (113M) architecture.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
-
 @dataclass
 class UltronConfig:
     B: int = 16                 # Micro-batch size per pass (65k tokens/step with grad accum 4)
@@ -40,4 +37,3 @@ class UltronConfig:
     def from_metadata(cls, **overrides):
         """Create an UltronConfig instance with optional overrides."""
         return cls(**overrides)
-
