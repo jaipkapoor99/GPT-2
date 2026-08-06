@@ -1,5 +1,9 @@
 # Ultron-113M: Modern Transformer Pre-training Pipeline
 
+[![CI](https://github.com/jaipkapoor99/ultron/actions/workflows/ci.yml/badge.svg)](https://github.com/jaipkapoor99/ultron/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.13-EE4C2C?logo=pytorch&logoColor=white)
+
 A high-performance PyTorch implementation of **Ultron-113M** pre-trained from scratch on **10.0 billion tokens** of the **FineWeb-Edu** dataset.
 
 🤖🤖🤖
@@ -8,7 +12,7 @@ A high-performance PyTorch implementation of **Ultron-113M** pre-trained from sc
 
 > [!IMPORTANT]
 > **🚀 Pre-training Base Checkpoint Status Notice:**
-> This repository contains the **100% pre-trained base model checkpoint** (`10.0 Billion tokens`). It represents the raw foundational model before instruction tuning. **Supervised Fine-Tuning (SFT), DPO alignment, and specialized domain instruction-tuning pipelines are coming next!** 🍿🤖⚡
+> The **100% pre-trained base model checkpoint** (`10.0 billion tokens`) is published on [Hugging Face](https://huggingface.co/jaipkapoor99/ultron-124m). It represents the raw foundational model before instruction tuning. Checkpoints and dataset shards are intentionally excluded from Git.
 
 ---
 
@@ -26,7 +30,7 @@ Ultron-113M Layout:
 ├── Normalization     : RMSNorm (with QK-head normalization, eps=1e-5)
 ├── Logit Regularizer : Soft-Capping (cap=15.0 via tanh)
 ├── Linear Projections: 100% Bias-Free (bias=False across all layers)
-├── Optimizer         : Dual-Optimizer (Muon for 2D body, Fused AdamW for 1D/embeddings)
+├── Optimizer         : torch.optim.Muon for 2D body, fused AdamW for 1D/embeddings
 └── Dataset & Tokens  : FineWeb-Edu (10.0B tokens across 152,587 steps)
 ```
 
@@ -96,7 +100,7 @@ Ultron-113M Layout:
 | **FFN Activation** | Standard GELU | **SwiGLU** | Gated non-linearity yielding higher model capacity per FLOP; aligned to multiples of 64 for Tensor Core throughput. |
 | **Layer Normalization** | LayerNorm (with bias) | **RMSNorm (Bias-Free)** | Eliminates mean-centering overhead; 100% bias-free projections (`bias=False`) for cleaner gradient dynamics. |
 | **Logit Regularization** | None | **Logit Soft-Capping** | Applies `tanh` capping (`cap=15.0`) to prevent overconfidence and extreme logit growth. |
-| **Optimizer Engine** | AdamW | **Muon + Fused AdamW** | Uses Keller Jordan's **Muon** (Momentum Orthogonalized by 5th-order Newton-Schulz iterations) for 2D body weights. |
+| **Optimizer Engine** | AdamW | **PyTorch Muon + Fused AdamW** | Uses built-in `torch.optim.Muon` for 2D body weights and AdamW for embeddings and normalization parameters. |
 | **Learning Rate Schedule** | Cosine Decay | **WSD Schedule** | Warmup-Stable-Decay schedule with an 80% stable phase followed by linear decay. |
 | **Mixed Precision** | FP32 | **Native BFloat16 (`bf16`)** | Dynamic range stability without loss scalers on RTX 30xx/40xx/50xx GPUs. |
 | **Graph Compiler** | None | **PyTorch 2.0 (`torch.compile`)** | Fuses element-wise operations and kernel launches via Inductor. |
@@ -128,7 +132,7 @@ Ultron-113M Layout:
 | **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer (`HuggingFaceTB/SmolLM2-135M`) |
 | **Precision** | BFloat16 (`bf16`) | Native mixed precision |
 | **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
-| **Optimizer** | Muon + Fused AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
+| **Optimizer** | `torch.optim.Muon` + fused AdamW | Newton-Schulz matrix optimizer ($LR=0.04$) + fused AdamW ($LR=1.2\times 10^{-3}$) |
 | **Throughput** | ~186,310 tok/sec (~2.80 step/sec) | Benchmarked on single NVIDIA RTX 5090 GPU (32GB) |
 | **GPU VRAM Allocation** | ~16.2 GB / 32 GB | Measured via `nvidia-smi` during active pre-training |
 | **Total Pre-training Time** | **15 Hours 1 Minute (54,063s)** | 10.0 Billion Tokens / 152,587 total steps (100% Complete) |
@@ -139,6 +143,8 @@ Ultron-113M Layout:
 
 ```text
 ultron/
+├── .github/workflows/ci.yml # CPU dependency, compilation, and pytest CI
+├── AGENTS.md               # Contributor and repository guidelines
 ├── model.py                # PyTorch Ultron-113M (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
 ├── config.py               # Model & Hyperparameter Configuration Dataclass
 ├── dataset.py              # Memory-mapped sharded dataset loader
@@ -150,9 +156,9 @@ ultron/
 ├── shards_edu/             # Binary FineWeb-Edu tokenized data shards (.bin)
 ├── logs/                   # Dedicated logs directory (loss_curve.svg plot & benchmark JSON evaluations)
 ├── wandb/                  # Local step telemetry logs & experiment tracking runs
-├── .agents/                # Project AGENTS.md rules & workspace customization
-├── tests/                  # Unit & Integration Tests (Accelerate + torch.testing)
-│   └── test_model.py       # Core model architecture & generation unit tests
+├── .agents/                # Agent-specific engineering principles
+├── tests/                  # CPU-safe pytest suite
+│   └── test_model.py       # Causality, cache, checkpoint, optimizer, and learning tests
 └── scripts/                # Helper Scripts
     ├── generate.py         # Text generation from local Accelerate checkpoint
     ├── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
@@ -181,7 +187,10 @@ cd ultron
 # Fast environment setup using uv
 uv venv --python 3.13 .venv
 source .venv/bin/activate
-uv pip install -r requirements.txt nvidia-cuda-nvcc
+uv pip install -r requirements.txt
+
+# Optional: install if torch.compile cannot locate a CUDA compiler
+uv pip install nvidia-cuda-nvcc
 ```
 
 ### 2. Tokenize Dataset
@@ -214,8 +223,26 @@ Recommended settings for this project:
 Launch pre-training:
 
 ```bash
-accelerate launch train.py
+accelerate launch train.py --mode=fresh
 ```
+
+---
+
+## ✅ Tests & Continuous Integration
+
+Run the CPU-safe test suite locally:
+
+```bash
+pytest -q
+```
+
+Run the slower compiler smoke test explicitly:
+
+```bash
+ULTRON_TEST_COMPILE=1 pytest -q tests/test_model.py -k torch_compile
+```
+
+The workflow at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests to `master`. It installs Python 3.13, CPU-only PyTorch 2.13, validates dependencies, compiles the Python sources, and runs pytest. Full CUDA training and dataset-dependent evaluation remain local workflows.
 
 ---
 
