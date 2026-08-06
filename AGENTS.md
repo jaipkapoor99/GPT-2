@@ -21,6 +21,12 @@ accelerate launch scripts/generate.py --prompt "Hello"
 
 `requirements.lock` pins backend-neutral dependencies; install the appropriate PyTorch 2.13 wheel first. The standard test suite is CPU-safe. The compiler test is opt-in because it is slower and toolchain-dependent. `train.py --mode=test` exercises the training pipeline and requires prepared dataset shards; full training should run on a CUDA device with BF16 support.
 
+## Training & Data Invariants
+
+Training windows use `step=config.T`: never restore the former 256-token stride, which duplicated 75% of adjacent 1,024-token samples. Training uses `EpochRandomSampler` with `config.data_seed`; validation remains sequential and split at shard boundaries. Resume must reconstruct the shuffle epoch and batch offset, reject seed drift, and preserve `dev_batch_cursor`. Sampled validation advances through the dev loader and wraps only after exhausting it.
+
+Keep W&B on its native step axis. Throughput and held dev loss are continuous; train/dev comparison uses interval-average train loss. ETA belongs in the terminal, while bookkeeping belongs in the run summary rather than separate charts.
+
 ## Coding Style & Naming Conventions
 
 Use four-space indentation and conventional Python naming: `snake_case` for functions and variables, `PascalCase` for classes, and descriptive lowercase module names. Keep model math, training control, dataset I/O, and telemetry separated. Centralize hyperparameters and remote repository identifiers in `UltronConfig`; avoid hardcoded duplicates in scripts. Prefer established PyTorch, Accelerate, Transformers, and lm-eval APIs over custom infrastructure.
@@ -29,13 +35,13 @@ No formatter is currently enforced. Keep imports minimal, add type hints to publ
 
 ## Testing Guidelines
 
-Tests use `pytest` and follow `test_<behavior>` naming. New model behavior should include small CPU fixtures. Cover tensor shapes, causal isolation, KV-cache equivalence, checkpoint compatibility, optimizer partitioning, and finite loss. Avoid tests that download data or instantiate the full model unless explicitly marked as slow.
+Tests use `pytest` and follow `test_<behavior>` naming. The CPU-safe suite currently has 91 tests covering model contracts, data geometry, shuffled resume, rotating validation, telemetry, atomic tokenization, shard integrity, and upload guards. Every bug fix needs a regression test; test corruption and boundary conditions as well as successful execution. Avoid downloads and full-model allocation unless explicitly marked slow.
 
 ## Commit & Pull Request Guidelines
 
 History follows Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`, and `refactor:`. Keep commits focused and imperative.
 
-Pull requests should explain motivation, implementation, verification commands, and any checkpoint or dataset compatibility impact. Link relevant issues and include benchmark evidence for performance or model-quality claims. Add screenshots only for visual telemetry or documentation changes.
+Pull requests should explain motivation, implementation, verification commands, and checkpoint or dataset compatibility impact. Include matched-step averaged losses for convergence claims and screenshots only for visual telemetry changes.
 
 ## Security & Configuration
 
