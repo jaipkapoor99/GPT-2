@@ -1,118 +1,354 @@
-import os
-import sys
-import json
+"""Tokenize FineWeb-Edu into deterministic, atomically committed shards.
+
+Resume checkpoints store the exact number of source documents consumed plus
+the token buffer left after the last committed shard. Dataset and tokenizer
+revisions are pinned on the first run, so a restart reproduces the same stream.
+"""
+
+import argparse
 import glob
+import json
+import os
 import signal
+import sys
+from pathlib import Path
+
 import numpy as np
-from transformers import AutoTokenizer
 from datasets import load_dataset
+from huggingface_hub import HfApi
+from transformers import AutoTokenizer
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import UltronConfig
 from telemetry import TokenizationTelemetry
 
-def main(shard_size_tokens=100_000_000, max_shards=100):
-    """
-    Production-grade script to stream FineWeb-Edu sample-10BT (10 Billion Tokens)
-    and save them into compact 100M token binary shards (uint16 format).
-    Incorporate TokenizationTelemetry and handles KeyboardInterrupt gracefully.
-    """
-    output_dir = "shards_edu"
-    os.makedirs(output_dir, exist_ok=True)
-    
-    existing_shards = sorted(glob.glob(os.path.join(output_dir, "fineweb_edu_shard_*.bin")))
-    start_shard = len(existing_shards)
-    target_total_tokens = max_shards * shard_size_tokens
-    
-    print(f"=== FINEWEB-EDU PRE-TOKENIZATION PIPELINE ===")
-    print(f"Existing Shards   : {start_shard} shards ({start_shard * shard_size_tokens / 1e9:.2f}B tokens)")
-    print(f"Resuming at Shard : fineweb_edu_shard_{start_shard:04d}.bin")
-    
-    from config import UltronConfig
-    config = UltronConfig()
-    
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
-    eos_token_id = tokenizer.eos_token_id or 0
 
-    raw_dataset = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
+DATASET_ID = "HuggingFaceFW/fineweb-edu"
+DATASET_CONFIG = "sample-10BT"
+DATASET_SPLIT = "train"
+STATE_SCHEMA_VERSION = 1
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_json_write(path: Path, payload: dict) -> None:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("w") as file:
+        json.dump(payload, file, indent=2)
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temporary_path, path)
+    _fsync_directory(path.parent)
+
+
+def _atomic_numpy_write(path: Path, values: np.ndarray) -> None:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("wb") as file:
+        np.save(file, values, allow_pickle=False)
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temporary_path, path)
+    _fsync_directory(path.parent)
+
+
+def _atomic_shard_write(path: Path, values: np.ndarray) -> None:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("wb") as file:
+        values.tofile(file)
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temporary_path, path)
+    _fsync_directory(path.parent)
+
+
+def _validate_committed_shards(
+    output_dir: Path,
+    next_shard: int,
+    shard_size_tokens: int,
+) -> None:
+    expected_bytes = shard_size_tokens * np.dtype(np.uint16).itemsize
+    for shard_index in range(next_shard):
+        shard_path = output_dir / f"fineweb_edu_shard_{shard_index:04d}.bin"
+        meta_path = output_dir / f"fineweb_edu_shard_{shard_index:04d}_meta.json"
+        if not shard_path.is_file() or shard_path.stat().st_size != expected_bytes:
+            raise RuntimeError(
+                f"Committed shard {shard_index:04d} is missing or has an "
+                f"invalid size; expected {expected_bytes:,} bytes."
+            )
+        if not meta_path.is_file():
+            raise RuntimeError(f"Metadata is missing for shard {shard_index:04d}.")
+        with meta_path.open() as file:
+            metadata = json.load(file)
+        if (
+            metadata.get("shard_index") != shard_index
+            or metadata.get("tokens") != shard_size_tokens
+            or metadata.get("dtype") != "uint16"
+        ):
+            raise RuntimeError(f"Metadata is invalid for shard {shard_index:04d}.")
+
+
+def _load_resume_state(
+    output_dir: Path,
+    shard_size_tokens: int,
+    max_shards: int,
+) -> tuple[dict | None, np.ndarray]:
+    state_path = output_dir / "tokenization_state.json"
+    if not state_path.exists():
+        existing_outputs = glob.glob(str(output_dir / "fineweb_edu_shard_*"))
+        if existing_outputs:
+            raise RuntimeError(
+                "Shard files exist without an exact resume checkpoint. "
+                "Move or delete them before starting."
+            )
+        return None, np.empty(0, dtype=np.uint16)
+
+    with state_path.open() as file:
+        state = json.load(file)
+    expected = {
+        "schema_version": STATE_SCHEMA_VERSION,
+        "dataset_id": DATASET_ID,
+        "dataset_config": DATASET_CONFIG,
+        "dataset_split": DATASET_SPLIT,
+        "shard_size_tokens": shard_size_tokens,
+        "max_shards": max_shards,
+    }
+    mismatches = {
+        key: (state.get(key), value)
+        for key, value in expected.items()
+        if state.get(key) != value
+    }
+    if mismatches:
+        raise RuntimeError(f"Resume checkpoint configuration mismatch: {mismatches}")
+
+    next_shard = state["next_shard"]
+    _validate_committed_shards(output_dir, next_shard, shard_size_tokens)
+
+    pending_path = output_dir / state["pending_tokens_file"]
+    if not pending_path.is_file():
+        raise RuntimeError(f"Resume token buffer is missing: {pending_path}")
+    pending_tokens = np.load(pending_path, allow_pickle=False)
+    if pending_tokens.dtype != np.uint16 or len(pending_tokens) != state["pending_tokens"]:
+        raise RuntimeError("Resume token buffer does not match checkpoint metadata.")
+    return state, pending_tokens
+
+
+def _save_resume_state(
+    output_dir: Path,
+    state: dict,
+    pending_tokens: list[int],
+    previous_pending_file: str | None,
+) -> None:
+    pending_array = np.asarray(pending_tokens, dtype=np.uint16)
+    pending_name = f".pending_tokens_{state['next_shard']:04d}.npy"
+    _atomic_numpy_write(output_dir / pending_name, pending_array)
+
+    state = {
+        **state,
+        "pending_tokens": len(pending_array),
+        "pending_tokens_file": pending_name,
+    }
+    _atomic_json_write(output_dir / "tokenization_state.json", state)
+
+    if previous_pending_file and previous_pending_file != pending_name:
+        previous_path = output_dir / previous_pending_file
+        if previous_path.exists():
+            previous_path.unlink()
+
+
+def _new_state(
+    dataset_revision: str,
+    tokenizer_name: str,
+    tokenizer_revision: str,
+    shard_size_tokens: int,
+    max_shards: int,
+) -> dict:
+    return {
+        "schema_version": STATE_SCHEMA_VERSION,
+        "dataset_id": DATASET_ID,
+        "dataset_config": DATASET_CONFIG,
+        "dataset_split": DATASET_SPLIT,
+        "dataset_revision": dataset_revision,
+        "tokenizer_name": tokenizer_name,
+        "tokenizer_revision": tokenizer_revision,
+        "shard_size_tokens": shard_size_tokens,
+        "max_shards": max_shards,
+        "next_shard": 0,
+        "source_documents_consumed": 0,
+        "committed_tokens": 0,
+    }
+
+
+def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
+    output_dir = Path("shards_edu")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    state, pending_array = _load_resume_state(
+        output_dir,
+        shard_size_tokens,
+        max_shards,
+    )
+    config = UltronConfig()
+
+    if state is None:
+        api = HfApi()
+        dataset_revision = api.dataset_info(DATASET_ID).sha
+        tokenizer_revision = api.model_info(config.tokenizer_name).sha
+        state = _new_state(
+            dataset_revision,
+            config.tokenizer_name,
+            tokenizer_revision,
+            shard_size_tokens,
+            max_shards,
+        )
+        _save_resume_state(output_dir, state, [], previous_pending_file=None)
+        state["pending_tokens"] = 0
+        state["pending_tokens_file"] = ".pending_tokens_0000.npy"
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        state["tokenizer_name"],
+        revision=state["tokenizer_revision"],
+    )
+    if tokenizer.vocab_size > np.iinfo(np.uint16).max:
+        raise ValueError("Tokenizer vocabulary does not fit in uint16 shards.")
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None:
+        raise ValueError("Tokenizer must define an EOS token.")
+
+    raw_dataset = load_dataset(
+        state["dataset_id"],
+        name=state["dataset_config"],
+        split=state["dataset_split"],
+        streaming=True,
+        revision=state["dataset_revision"],
+    )
+    documents_consumed = state["source_documents_consumed"]
+    if documents_consumed:
+        raw_dataset = raw_dataset.skip(documents_consumed)
     iterator = iter(raw_dataset)
 
-    # Fast-forward past existing shards by token length approximation
-    tokens_to_skip = start_shard * shard_size_tokens
-    if tokens_to_skip > 0:
-        print(f"Fast-forwarding stream past {tokens_to_skip:,} tokens...")
-        skipped = 0
-        for doc in iterator:
-            approx_toks = len(doc['text']) // 4
-            skipped += approx_toks
-            if skipped >= tokens_to_skip:
-                break
+    shard_index = state["next_shard"]
+    current_tokens = pending_array.tolist()
+    target_total_tokens = max_shards * shard_size_tokens
+    committed_tokens = state["committed_tokens"]
 
-    telemetry = TokenizationTelemetry(target_tokens=target_total_tokens, start_tokens=tokens_to_skip)
-    current_tokens = []
-    shard_index = start_shard
-    total_tokens_processed = tokens_to_skip
-    batch_size = 1000
+    print("=== FINEWEB-EDU PRE-TOKENIZATION PIPELINE ===")
+    print(f"Dataset Revision  : {state['dataset_revision']}")
+    print(f"Tokenizer Revision: {state['tokenizer_revision']}")
+    print(f"Committed Shards  : {shard_index}/{max_shards}")
+    print(f"Source Documents  : {documents_consumed:,}")
+    print(f"Buffered Tokens   : {len(current_tokens):,}")
 
-    # Signal handler for clean keyboard interruption
-    def handle_interrupt(signum, frame):
-        telemetry.print_message(f"\n⚠️ KeyboardInterrupt received. Safely stopping tokenization at {total_tokens_processed / 1e9:.2f}B tokens...")
-        os._exit(0)
-    
+    telemetry = TokenizationTelemetry(
+        target_tokens=target_total_tokens,
+        start_tokens=committed_tokens,
+    )
+    stop_requested = False
+
+    def handle_interrupt(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
     signal.signal(signal.SIGINT, handle_interrupt)
+    signal.signal(signal.SIGTERM, handle_interrupt)
 
+    batch_size = 1000
     try:
-        while shard_index < max_shards:
+        while shard_index < max_shards and not stop_requested:
             batch_docs = []
             for _ in range(batch_size):
+                if stop_requested:
+                    break
                 try:
-                    batch_docs.append(next(iterator)['text'])
+                    batch_docs.append(next(iterator)["text"])
+                    documents_consumed += 1
                 except StopIteration:
                     break
-
             if not batch_docs:
                 break
 
-            # Fast parallel batch encoding via Rust backend
-            if hasattr(tokenizer, "backend_tokenizer"):
-                encodings = tokenizer.backend_tokenizer.encode_batch(batch_docs, add_special_tokens=False)
-                for enc in encodings:
-                    tokens = list(enc.ids)
-                    tokens.append(eos_token_id)
-                    current_tokens.extend(tokens)
-                    total_tokens_processed += len(tokens)
-                    telemetry.update(added_tokens=len(tokens), current_total=total_tokens_processed)
-            else:
-                for doc_text in batch_docs:
-                    tokens = tokenizer.encode(doc_text, verbose=False)
-                    tokens.append(eos_token_id)
-                    current_tokens.extend(tokens)
-                    total_tokens_processed += len(tokens)
-                    telemetry.update(added_tokens=len(tokens), current_total=total_tokens_processed)
+            encodings = tokenizer.backend_tokenizer.encode_batch(
+                batch_docs,
+                add_special_tokens=False,
+            )
+            added_tokens = 0
+            for encoding in encodings:
+                document_tokens = encoding.ids
+                current_tokens.extend(document_tokens)
+                current_tokens.append(eos_token_id)
+                added_tokens += len(document_tokens) + 1
+            telemetry.update(
+                added_tokens=added_tokens,
+                current_total=committed_tokens + len(current_tokens),
+            )
 
             while len(current_tokens) >= shard_size_tokens and shard_index < max_shards:
-                shard_tokens = np.array(current_tokens[:shard_size_tokens], dtype=np.uint16)
+                shard_values = np.asarray(
+                    current_tokens[:shard_size_tokens],
+                    dtype=np.uint16,
+                )
                 current_tokens = current_tokens[shard_size_tokens:]
-                
-                shard_filename = os.path.join(output_dir, f"fineweb_edu_shard_{shard_index:04d}.bin")
-                shard_tokens.tofile(shard_filename)
-                
-                meta_filename = os.path.join(output_dir, f"fineweb_edu_shard_{shard_index:04d}_meta.json")
-                with open(meta_filename, "w") as f:
-                    json.dump({
+
+                shard_path = output_dir / f"fineweb_edu_shard_{shard_index:04d}.bin"
+                meta_path = output_dir / f"fineweb_edu_shard_{shard_index:04d}_meta.json"
+                _atomic_shard_write(shard_path, shard_values)
+                _atomic_json_write(
+                    meta_path,
+                    {
                         "shard_index": shard_index,
                         "tokens": shard_size_tokens,
                         "vocab_size": tokenizer.vocab_size,
-                        "dtype": "uint16"
-                    }, f, indent=2)
-                    
-                telemetry.print_message(f"✓ Saved Shard {shard_index:04d} ({shard_size_tokens:,} tokens -> {shard_filename})")
-                shard_index += 1
+                        "dtype": "uint16",
+                        "dataset_revision": state["dataset_revision"],
+                        "tokenizer_revision": state["tokenizer_revision"],
+                    },
+                )
 
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
-            
-    telemetry.close()
-    print(f"\n🎉 Pre-tokenization Complete! Total Tokens Processed: {total_tokens_processed:,}")
+                shard_index += 1
+                committed_tokens = shard_index * shard_size_tokens
+                previous_pending_file = state.get("pending_tokens_file")
+                state.update(
+                    {
+                        "next_shard": shard_index,
+                        "source_documents_consumed": documents_consumed,
+                        "committed_tokens": committed_tokens,
+                    }
+                )
+                _save_resume_state(
+                    output_dir,
+                    state,
+                    current_tokens,
+                    previous_pending_file=previous_pending_file,
+                )
+                state["pending_tokens_file"] = (
+                    f".pending_tokens_{shard_index:04d}.npy"
+                )
+                telemetry.print_message(
+                    f"✓ Atomically committed shard {shard_index - 1:04d}"
+                )
+    finally:
+        telemetry.close()
+
+    if stop_requested:
+        print(
+            "\nStopped safely. Uncommitted work will be replayed from the "
+            "last exact checkpoint."
+        )
+    else:
+        print(f"\nPre-tokenization complete: {committed_tokens:,} tokens committed.")
+
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--shard-size-tokens", type=int, default=100_000_000)
+    parser.add_argument("--max-shards", type=int, default=100)
+    arguments = parser.parse_args()
+    if arguments.shard_size_tokens <= 0 or arguments.max_shards <= 0:
+        parser.error("shard size and shard count must be greater than zero")
+    main(arguments.shard_size_tokens, arguments.max_shards)

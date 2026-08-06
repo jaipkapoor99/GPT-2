@@ -31,7 +31,7 @@ class UltronTrainer:
         """Print one compact evaluation summary through the telemetry UI."""
         self.print_rich(
             f"Step {step:,} | train loss {train_loss:.4f} | "
-            f"dev loss {dev_loss:.4f} | lr {lr:.3e}"
+            f"sampled dev loss {dev_loss:.4f} | lr {lr:.3e}"
         )
 
     def update_learning_rate(self):
@@ -92,7 +92,7 @@ class UltronTrainer:
         avg_dev_loss = (totals[0] / totals[1]).item()
 
         self.print_table_row(self.step, train_loss, avg_dev_loss, lr)
-        # Log train_loss and dev_loss together at the same step
+        # This is a sampled estimate capped at 20 validation batches.
         self.telemetry.log_evaluation(self.step, train_loss, avg_dev_loss, lr, eta_seconds=eta_seconds)
         self.save_checkpoint()
         self.model.train()

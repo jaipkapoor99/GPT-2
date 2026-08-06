@@ -64,7 +64,7 @@ class UltronTelemetry:
                 wandb.define_metric("eval/*", step_metric="step")
                 wandb.define_metric("perf/*", step_metric="step")
 
-                wandb.define_metric("eval/dev_loss", summary="min")
+                wandb.define_metric("eval/sampled_dev_loss", summary="min")
                 wandb.define_metric("train/train_loss", summary="last")
             except Exception:
                 pass
@@ -133,7 +133,7 @@ class UltronTelemetry:
             if loss is not None:
                 postfix_dict["train_loss"] = f"{loss:.4f}"
             if self.last_dev_loss is not None:
-                postfix_dict["dev_loss"] = f"{self.last_dev_loss:.4f}"
+                postfix_dict["sampled_dev_loss"] = f"{self.last_dev_loss:.4f}"
                 
             self.pbar.set_postfix(postfix_dict, refresh=True)
 
@@ -176,18 +176,18 @@ class UltronTelemetry:
         }, step=step)
 
     def log_evaluation(self, step: int, train_loss: float, dev_loss: float, lr: float, eta_seconds: int):
-        """Log evaluation metrics at validation steps (train_loss and dev_loss logged together on same step)."""
+        """Log the 20-batch sampled validation estimate."""
         self.set_last_dev_loss(dev_loss)
         tok_per_sec = getattr(self, "last_throughput", 0.0)
         self.log_step({
-            "eval/dev_loss": dev_loss,
+            "eval/sampled_dev_loss": dev_loss,
             "train/loss": train_loss,
             "train/lr": lr,
             "perf/tokens_per_sec": tok_per_sec,
             "perf/steps_per_sec": getattr(self, "last_steps_per_sec", 0.0),
             "perf/eta_seconds": eta_seconds,
             # Top-level keys for W&B side-by-side train & dev loss chart
-            "dev_loss": dev_loss,
+            "sampled_dev_loss": dev_loss,
             "train_loss": train_loss,
             "lr": lr,
             "tokens_per_sec": tok_per_sec,

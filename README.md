@@ -161,10 +161,14 @@ ultron/
 ├── tests/                  # CPU-safe model, dataset, and training tests
 │   ├── test_dataset.py     # Shard lookup and leakage-safe split tests
 │   ├── test_model.py       # Causality, cache, optimizer, and learning tests
-│   └── test_training.py    # Evaluation, resume, and checkpoint-safety tests
+│   ├── test_tokenize_dataset.py # Exact-resume and atomic-write tests
+│   ├── test_training.py    # Evaluation, resume, and checkpoint-safety tests
+│   ├── test_upload_dataset_shards.py # Upload validation tests
+│   └── test_validate.py    # Full-validation metric tests
 └── scripts/                # Helper Scripts
     ├── generate.py         # Text generation from local Accelerate checkpoint
-    ├── tokenize_dataset.py # FineWeb-Edu dataset tokenization into binary shards
+    ├── tokenize_dataset.py # Exact-resume FineWeb-Edu sharding
+    ├── validate.py         # Complete leakage-safe validation pass
     ├── eval_lm_harness.py  # EleutherAI lm-evaluation-harness benchmark script
     ├── upload_checkpoint.py# Hugging Face Hub model checkpoint uploader script
     └── upload_dataset_shards.py # Hugging Face Hub dataset shards uploader script
@@ -204,8 +208,42 @@ uv pip install nvidia-cuda-nvcc
 Tokenize the FineWeb-Edu dataset into compact binary shards:
 
 ```bash
-python3 scripts/tokenize_dataset.py
+python scripts/tokenize_dataset.py
 ```
+
+Shards are committed atomically. The tokenizer pins the dataset and tokenizer
+revisions and records the exact source-document cursor plus pending token
+buffer in `shards_edu/tokenization_state.json`, allowing deterministic resume
+after interruption. Existing shards without this state file are rejected.
+Running the same command after an interruption resumes automatically.
+
+Check whether tokenization is already running:
+
+```bash
+pgrep -af '[t]okenize_dataset.py'
+```
+
+Monitor durable progress:
+
+```bash
+watch -n 5 'grep -E "\"next_shard\"|\"committed_tokens\"|\"source_documents_consumed\"" shards_edu/tokenization_state.json'
+```
+
+Request a safe stop; uncommitted work is replayed on resume:
+
+```bash
+pkill -INT -f '[t]okenize_dataset.py'
+```
+
+After all 100 shards are committed, validate and resumably upload them:
+
+```bash
+HF_TOKEN=hf_... python scripts/upload_dataset_shards.py
+```
+
+The uploader refuses incomplete or inconsistent shard sets and uploads only
+the `.bin` shards and their public metadata; private resume buffers remain
+local.
 
 ### 3. Configure Accelerate
 
@@ -248,6 +286,16 @@ Run the slower compiler smoke test explicitly:
 ULTRON_TEST_COMPILE=1 pytest -q tests/test_model.py -k torch_compile
 ```
 
+Training-time validation deliberately samples 20 dev batches for inexpensive
+monitoring. Run the complete leakage-safe validation partition separately:
+
+```bash
+accelerate launch scripts/validate.py
+```
+
+The full result, including loss, perplexity, sequence count, and token count,
+is written to `logs/full_validation.json`.
+
 The workflow at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests to `master`. It installs Python 3.13, CPU-only PyTorch 2.13, installs the pinned dependency set, validates dependencies, compiles the Python sources, and runs pytest. Full CUDA training and dataset-dependent evaluation remain local workflows.
 
 ---
@@ -264,7 +312,7 @@ The workflow at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on p
 | **Token Throughput** | **~186,310 tokens/sec** | Measured Muon + `torch.compile` throughput on the stated hardware |
 | **Compute Hardware** | **NVIDIA RTX 5090 (32GB)** | Native BFloat16 (`bf16`) mixed precision |
 | **Total Wall-Clock Time** | **15 Hours 1 Minute (54,063s)** | Completed full 10B token pre-training |
-| **Final Validation (`dev_loss`)** | **`2.9683`** | Evaluated on validation set at step 152,587 |
+| **Final sampled validation estimate (`dev_loss`)** | **`2.9683`** | Estimated from 20 validation batches at step 152,587; not a full validation pass |
 | **Final Train Loss (`train_loss`)** | **`2.9038`** | 100-step moving average at step 152,587 |
 
 ---
@@ -304,7 +352,7 @@ Pre-training metrics are logged live via **Weights & Biases** under the `ultron-
 
 - **Local Telemetry**: `telemetry.py` records structured metrics through Accelerate and W&B while maintaining terminal progress and checkpoint metadata.
 - **Out-of-Order Resumption Resolved**: Solved early telemetry log fragmentation by standardizing `resume="allow"` in `setup_accelerator_trackers()`. W&B runs now resume seamlessly across checkpoint restarts without step monotonicity conflicts.
-- **Metric Grouping & Summaries**: `train/*`, `eval/*`, and `perf/*` metrics are linked to the global step index with `dev_loss` set to `summary="min"`.
+- **Metric Grouping & Summaries**: `train/*`, `eval/*`, and `perf/*` metrics are linked to the global step index with `sampled_dev_loss` set to `summary="min"`. Frequent validation metrics are estimates over 20 batches, not full validation passes.
 
 > [!TIP]
 > **Engineering Takeaway — Master W&B & Telemetry Pipeline:**
