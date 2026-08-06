@@ -18,8 +18,9 @@ class UltronTrainer:
         self.accelerate_dir = "accelerate_checkpoint"
         self.step = 0
         self.decay_start_step = int(0.8 * config.max_steps)
-        self.tokens_per_step = (config.B * accelerator.gradient_accumulation_steps) * config.T
         self.telemetry = UltronTelemetry(config, accelerator, checkpoint_dir=self.accelerate_dir)
+        self.tokens_per_step = self.telemetry.global_tokens_per_step
+        self.total_training_tokens = self.tokens_per_step * config.max_steps
 
     def print_rich(self, msg: str):
         if hasattr(self, "telemetry") and self.telemetry is not None:
@@ -129,7 +130,7 @@ class UltronTrainer:
     def train(self):
         self.model.train()
         
-        self.print_rich(f"[bold yellow]⚡ Pre-training for {self.config.max_steps:,} steps ({self.tokens_per_step * self.config.max_steps:,} total tokens)...[/bold yellow]\n")
+        self.print_rich(f"[bold yellow]⚡ Pre-training for {self.config.max_steps:,} steps ({self.total_training_tokens:,} total tokens)...[/bold yellow]\n")
         # Training loop without tqdm progress bar
         
         if self.step > 0:

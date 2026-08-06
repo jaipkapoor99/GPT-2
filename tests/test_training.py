@@ -30,6 +30,7 @@ class TinyLanguageModel(torch.nn.Module):
 
 class FakeAccelerator:
     gradient_accumulation_steps = 1
+    num_processes = 1
     sync_gradients = True
     device = torch.device("cpu")
     is_main_process = True
@@ -92,7 +93,7 @@ class FakeTelemetry:
         pass
 
 
-def make_trainer(max_steps=2, is_test_mode=True):
+def make_trainer(max_steps=2, is_test_mode=True, num_processes=1):
     inputs = torch.randint(0, 16, (4, 6))
     targets = torch.roll(inputs, shifts=-1, dims=1)
     dataloader = DataLoader(TensorDataset(inputs, targets), batch_size=1)
@@ -110,6 +111,7 @@ def make_trainer(max_steps=2, is_test_mode=True):
     model = TinyLanguageModel()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     accelerator = FakeAccelerator()
+    accelerator.num_processes = num_processes
     trainer = UltronTrainer(
         model,
         None,
@@ -148,6 +150,13 @@ def test_custom_test_length_remains_checkpoint_safe():
 
     assert config.is_test_mode is True
     assert config.max_steps == 7
+
+
+def test_total_training_tokens_come_from_runtime_configuration():
+    trainer = make_trainer(max_steps=7, num_processes=3)
+
+    assert trainer.tokens_per_step == 1 * 1 * 6 * 3
+    assert trainer.total_training_tokens == 1 * 1 * 6 * 3 * 7
 
 
 def test_only_main_process_writes_checkpoint_metadata(tmp_path):
