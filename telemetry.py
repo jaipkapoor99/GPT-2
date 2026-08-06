@@ -1,90 +1,199 @@
-"""
-Ultron telemetry module
+"""Training and tokenization telemetry with rolling-rate estimates."""
 
-Encapsulates W&B tracking, live terminal progress meters, ETA calculations,
-metrics summary definitions, and checkpoint state telemetry resolution.
-"""
+from __future__ import annotations
 
-import os
-import json
-import time
 import dataclasses
-from typing import Dict, Any, Optional
+import json
+import math
+import os
+import time
+import warnings
+from collections import deque
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
 from accelerate import Accelerator
 from tqdm import tqdm
 
-class UltronTelemetry:
-    """Dedicated Telemetry & Experiment Tracking Manager."""
 
-    def __init__(self, config, accelerator: Accelerator, checkpoint_dir: str = "accelerate_checkpoint"):
+Clock = Callable[[], float]
+
+
+@dataclass(frozen=True)
+class RateSnapshot:
+    """A point-in-time rolling-rate estimate."""
+
+    units_per_second: float = 0.0
+    elapsed_seconds: float = 0.0
+
+
+class RollingRateMeter:
+    """Estimate recent throughput from monotonic cumulative counters."""
+
+    def __init__(self, window_seconds: float = 30.0, clock: Clock = time.monotonic):
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be greater than zero")
+        self.window_seconds = window_seconds
+        self.clock = clock
+        self.samples: deque[tuple[float, float]] = deque()
+
+    def update(self, total_units: float) -> RateSnapshot:
+        now = self.clock()
+        if self.samples and total_units < self.samples[-1][1]:
+            self.samples.clear()
+        self.samples.append((now, float(total_units)))
+
+        while (
+            len(self.samples) > 2
+            and now - self.samples[0][0] > self.window_seconds
+        ):
+            self.samples.popleft()
+
+        first_time, first_units = self.samples[0]
+        elapsed = now - first_time
+        if elapsed <= 0 or len(self.samples) < 2:
+            return RateSnapshot(elapsed_seconds=max(0.0, elapsed))
+        rate = max(0.0, (total_units - first_units) / elapsed)
+        return RateSnapshot(units_per_second=rate, elapsed_seconds=elapsed)
+
+
+def format_rate(rate: float, unit: str) -> str:
+    """Format a non-negative rate with compact SI units."""
+    if not math.isfinite(rate) or rate <= 0:
+        return f"— {unit}/s"
+    if rate >= 1e9:
+        return f"{rate / 1e9:.2f}G {unit}/s"
+    if rate >= 1e6:
+        return f"{rate / 1e6:.2f}M {unit}/s"
+    if rate >= 1e3:
+        return f"{rate / 1e3:.1f}k {unit}/s"
+    return f"{rate:.1f} {unit}/s"
+
+
+class UltronTelemetry:
+    """W&B metrics, rolling throughput, ETA, and terminal progress."""
+
+    PROJECT_NAME = "ultron-pretraining"
+    RATE_WINDOW_SECONDS = 30.0
+    RENDER_INTERVAL_SECONDS = 0.5
+
+    def __init__(
+        self,
+        config,
+        accelerator: Accelerator,
+        checkpoint_dir: str = "accelerate_checkpoint",
+        *,
+        clock: Clock = time.monotonic,
+    ):
         self.config = config
         self.accelerator = accelerator
-        self.checkpoint_dir = checkpoint_dir
-        self.start_time: Optional[float] = None
-        self.session_steps: int = 0
-        self.pbar: Optional[tqdm] = None
-        self.last_dev_loss: Optional[float] = None
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.clock = clock
+        self.rate_meter = RollingRateMeter(self.RATE_WINDOW_SECONDS, clock)
+        self.pbar: tqdm | None = None
+        self.last_render_time = float("-inf")
+        self.last_dev_loss: float | None = None
+        self.last_throughput = 0.0
+        self.last_steps_per_sec = 0.0
+        self.last_eta_seconds = 0
+        self._tracker_warning_emitted = False
+
     @classmethod
-    def setup_accelerator_trackers(cls, config, args, checkpoint_dir: str = "accelerate_checkpoint") -> Accelerator:
-        """Helper to configure Accelerator trackers with W&B run ID resumption."""
-        is_test = (getattr(args, "mode", None) == "test") or getattr(config, "is_test_mode", False)
-        
-        if is_test:
-            # Disable Weights & Biases telemetry completely on test runs
-            accelerator = Accelerator(gradient_accumulation_steps=config.grad_accum_steps, log_with=None)
-            return accelerator
-
-        wandb_init_kwargs = {"wandb": {"name": "master"}}
-        state_file = os.path.join(checkpoint_dir, "training_state.json")
-        
-        if getattr(args, "mode", "continue") == "fresh":
-            wandb_init_kwargs["wandb"].update({"resume": "never"})
-        elif getattr(args, "mode", "continue") == "continue" and os.path.exists(state_file):
-            try:
-                with open(state_file, "r") as f:
-                    state_data = json.load(f)
-                    if "wandb_run_id" in state_data:
-                        wandb_init_kwargs["wandb"].update({"id": state_data["wandb_run_id"], "resume": "allow"})
-            except Exception:
-                pass
-
-        accelerator = Accelerator(gradient_accumulation_steps=config.grad_accum_steps, log_with="wandb")
-        accelerator.init_trackers(
-            "ultron-pretraining",
-            config=dataclasses.asdict(config),
-            init_kwargs=wandb_init_kwargs
+    def setup_accelerator_trackers(
+        cls,
+        config,
+        args,
+        checkpoint_dir: str = "accelerate_checkpoint",
+    ) -> Accelerator:
+        """Create Accelerator and configure a resumable W&B tracker."""
+        is_test = (
+            getattr(args, "mode", None) == "test"
+            or getattr(config, "is_test_mode", False)
         )
+        if is_test:
+            return Accelerator(
+                gradient_accumulation_steps=config.grad_accum_steps,
+                log_with=None,
+            )
 
-        if accelerator.is_main_process:
+        run_mode = getattr(args, "mode", "continue")
+        wandb_options: dict[str, Any] = {
+            "name": os.environ.get("ULTRON_RUN_NAME", run_mode),
+            "resume": "never" if run_mode == "fresh" else "allow",
+        }
+        state_path = Path(checkpoint_dir) / "training_state.json"
+        if run_mode == "continue" and state_path.exists():
             try:
-                import wandb
-                # Structured metric definitions and summaries
-                wandb.define_metric("step")
-                wandb.define_metric("train/*", step_metric="step")
-                wandb.define_metric("eval/*", step_metric="step")
-                wandb.define_metric("perf/*", step_metric="step")
+                with state_path.open() as file:
+                    run_id = json.load(file).get("wandb_run_id")
+                if run_id:
+                    wandb_options["id"] = run_id
+            except (OSError, json.JSONDecodeError) as error:
+                warnings.warn(
+                    f"Could not read W&B resume metadata from {state_path}: {error}",
+                    stacklevel=2,
+                )
 
-                wandb.define_metric("eval/sampled_dev_loss", summary="min")
-                wandb.define_metric("train/train_loss", summary="last")
-            except Exception:
-                pass
-
+        accelerator = Accelerator(
+            gradient_accumulation_steps=config.grad_accum_steps,
+            log_with="wandb",
+        )
+        accelerator.init_trackers(
+            cls.PROJECT_NAME,
+            config=dataclasses.asdict(config),
+            init_kwargs={"wandb": wandb_options},
+        )
+        cls._define_wandb_metrics(accelerator)
         return accelerator
 
-    def get_wandb_run_id(self) -> Optional[str]:
-        """Extract the current active W&B run ID if available."""
+    @staticmethod
+    def _define_wandb_metrics(accelerator: Accelerator) -> None:
+        if not accelerator.is_main_process:
+            return
+        try:
+            import wandb
+
+            wandb.define_metric("step")
+            wandb.define_metric("train/*", step_metric="step")
+            wandb.define_metric("eval/*", step_metric="step")
+            wandb.define_metric("perf/*", step_metric="step")
+            wandb.define_metric("eval/sampled_dev_loss", summary="min")
+            wandb.define_metric("train/loss", summary="last")
+        except (ImportError, RuntimeError) as error:
+            warnings.warn(
+                f"W&B metric definitions were not applied: {error}",
+                stacklevel=2,
+            )
+
+    @property
+    def global_tokens_per_step(self) -> int:
+        """Tokens consumed by one optimizer step across all workers."""
+        return (
+            self.config.B
+            * self.accelerator.gradient_accumulation_steps
+            * self.config.T
+            * self.accelerator.num_processes
+        )
+
+    def get_wandb_run_id(self) -> str | None:
+        """Return the active W&B run ID, warning once on tracker failures."""
         if not self.accelerator.is_main_process:
             return None
         try:
-            wandb_tracker = self.accelerator.get_tracker("wandb")
-            if wandb_tracker is not None and hasattr(wandb_tracker, "run"):
-                return wandb_tracker.run.id
-        except Exception:
-            pass
-        return None
+            tracker = self.accelerator.get_tracker("wandb", unwrap=True)
+            run = getattr(tracker, "run", None)
+            return getattr(run, "id", None)
+        except (KeyError, RuntimeError, AttributeError) as error:
+            if not self._tracker_warning_emitted:
+                warnings.warn(
+                    f"Could not resolve the active W&B run ID: {error}",
+                    stacklevel=2,
+                )
+                self._tracker_warning_emitted = True
+            return None
 
-    def _init_pbar(self, initial_step: int):
-        """Initialize tqdm progress bar on main process."""
+    def _init_pbar(self, initial_step: int) -> None:
         if self.accelerator.is_main_process and self.pbar is None:
             self.pbar = tqdm(
                 total=self.config.max_steps,
@@ -92,159 +201,297 @@ class UltronTelemetry:
                 desc="⚡ Pre-training",
                 unit="step",
                 dynamic_ncols=True,
-                leave=True
+                leave=True,
+                mininterval=self.RENDER_INTERVAL_SECONDS,
             )
 
-    def set_last_dev_loss(self, dev_loss: float):
-        """Record the latest dev loss from evaluation."""
+    def set_last_dev_loss(self, dev_loss: float) -> None:
         self.last_dev_loss = dev_loss
 
-    def update_terminal_progress(self, current_step: int, loss: Optional[float] = None) -> int:
-        """Update live tqdm progress bar with throughput (tok/s), train loss, and dev loss."""
-        if self.start_time is None:
-            self.start_time = time.time()
-            self.session_steps = 0
+    def update_terminal_progress(
+        self,
+        current_step: int,
+        loss: float | None = None,
+    ) -> int:
+        """Update rolling global throughput and the main-process progress bar."""
+        snapshot = self.rate_meter.update(current_step)
+        steps_per_second = snapshot.units_per_second
+        tokens_per_second = steps_per_second * self.global_tokens_per_step
+        remaining_steps = max(0, self.config.max_steps - current_step)
+        eta_seconds = (
+            int(remaining_steps / steps_per_second)
+            if steps_per_second > 0
+            else 0
+        )
 
-        self.session_steps += 1
+        self.last_steps_per_sec = steps_per_second
+        self.last_throughput = tokens_per_second
+        self.last_eta_seconds = eta_seconds
+
         if self.pbar is None:
             self._init_pbar(current_step)
-
-        elapsed = time.time() - self.start_time
-        remaining_steps = max(0, self.config.max_steps - current_step)
-        steps_per_sec = self.session_steps / elapsed if elapsed > 0 else 0.0
-        tokens_per_step = (self.config.B * self.accelerator.gradient_accumulation_steps) * self.config.T
-        tokens_per_sec = steps_per_sec * tokens_per_step
-        self.last_throughput = tokens_per_sec
-        self.last_steps_per_sec = steps_per_sec
-        eta = (remaining_steps / steps_per_sec) if steps_per_sec > 0 else 0
-
-        if self.accelerator.is_main_process and self.pbar is not None:
-            # Update tqdm progress bar position and postfix stats
+        now = self.clock()
+        should_render = (
+            current_step >= self.config.max_steps
+            or now - self.last_render_time >= self.RENDER_INTERVAL_SECONDS
+        )
+        if self.accelerator.is_main_process and self.pbar is not None and should_render:
             self.pbar.n = current_step
-            
-            if tokens_per_sec >= 1e6:
-                tok_str = f"{tokens_per_sec / 1e6:.2f}M tok/s"
-            elif tokens_per_sec >= 1e3:
-                tok_str = f"{tokens_per_sec / 1e3:.1f}k tok/s"
-            else:
-                tok_str = f"{tokens_per_sec:.0f} tok/s"
-                
-            postfix_dict = {"tok/s": tok_str}
+            postfix = {
+                "tok/s": format_rate(tokens_per_second, "tok"),
+                "ETA": f"{eta_seconds // 60:d}m" if eta_seconds else "—",
+            }
             if loss is not None:
-                postfix_dict["train_loss"] = f"{loss:.4f}"
+                postfix["train_loss"] = f"{loss:.4f}"
             if self.last_dev_loss is not None:
-                postfix_dict["sampled_dev_loss"] = f"{self.last_dev_loss:.4f}"
-                
-            self.pbar.set_postfix(postfix_dict, refresh=True)
+                postfix["sampled_dev_loss"] = f"{self.last_dev_loss:.4f}"
+            self.pbar.set_postfix(postfix, refresh=True)
+            self.last_render_time = now
+        return eta_seconds
 
-        return int(eta)
+    def print_message(self, text: str) -> None:
+        if not self.accelerator.is_main_process:
+            return
+        if self.pbar is not None:
+            self.pbar.write(text)
+        else:
+            self.accelerator.print(text)
 
-    def print_message(self, text: str):
-        """Print log message cleanly above tqdm progress bar."""
-        if self.accelerator.is_main_process:
-            if self.pbar is not None:
-                self.pbar.write(text)
-            else:
-                print(text)
-
-    def close(self):
-        """Close tqdm progress bar safely."""
+    def close(self) -> None:
         if self.pbar is not None:
             self.pbar.close()
             self.pbar = None
 
-    def log_step(self, metrics: Dict[str, Any], step: int):
-        """Log metric key-values to Accelerate trackers."""
-        self.accelerator.log(metrics, step=step)
+    def log_step(self, metrics: Mapping[str, Any], step: int) -> None:
+        self.accelerator.log(dict(metrics), step=step)
 
-    def log_training_step(self, step: int, loss: float, lr: float, progress_percent: float, eta_seconds: int):
-        """Log structured training metrics per iteration step."""
-        tok_per_sec = getattr(self, "last_throughput", 0.0)
-        self.log_step({
+    def _performance_metrics(self) -> dict[str, float]:
+        return {
+            "perf/tokens_per_sec": self.last_throughput,
+            "perf/steps_per_sec": self.last_steps_per_sec,
+        }
+
+    def log_training_step(
+        self,
+        step: int,
+        loss: float,
+        lr: float,
+    ) -> None:
+        metrics = {
             "train/loss": loss,
             "train/lr": lr,
-            "train/progress_percent": progress_percent,
-            "perf/tokens_per_sec": tok_per_sec,
-            "perf/steps_per_sec": getattr(self, "last_steps_per_sec", 0.0),
-            "perf/eta_seconds": eta_seconds,
-            # Top-level keys for W&B unified line graph & backwards compatibility
-            "train_loss": loss,
-            "lr": lr,
-            "tokens_per_sec": tok_per_sec,
-            "progress_percent": progress_percent,
-            "eta_seconds": eta_seconds,
-        }, step=step)
+            **self._performance_metrics(),
+        }
+        self.log_step(metrics, step)
 
-    def log_evaluation(self, step: int, train_loss: float, dev_loss: float, lr: float, eta_seconds: int):
-        """Log the 20-batch sampled validation estimate."""
+    def log_evaluation(
+        self,
+        step: int,
+        train_loss: float,
+        dev_loss: float,
+        lr: float,
+    ) -> None:
+        """Log a deliberately sampled validation estimate."""
         self.set_last_dev_loss(dev_loss)
-        tok_per_sec = getattr(self, "last_throughput", 0.0)
-        self.log_step({
+        metrics = {
             "eval/sampled_dev_loss": dev_loss,
             "train/loss": train_loss,
             "train/lr": lr,
-            "perf/tokens_per_sec": tok_per_sec,
-            "perf/steps_per_sec": getattr(self, "last_steps_per_sec", 0.0),
-            "perf/eta_seconds": eta_seconds,
-            # Top-level keys for W&B side-by-side train & dev loss chart
-            "sampled_dev_loss": dev_loss,
-            "train_loss": train_loss,
-            "lr": lr,
-            "tokens_per_sec": tok_per_sec,
-            "eta_seconds": eta_seconds,
-        }, step=step)
+            **self._performance_metrics(),
+        }
+        self.log_step(metrics, step)
 
 
 class TokenizationTelemetry:
-    """Dedicated Telemetry Manager for Tokenization & Data Sharding using tqdm."""
+    """Rolling throughput and throttled progress for dataset tokenization."""
 
-    def __init__(self, target_tokens: int, start_tokens: int = 0):
+    RATE_WINDOW_SECONDS = 30.0
+    RENDER_INTERVAL_SECONDS = 0.5
+
+    def __init__(
+        self,
+        target_tokens: int,
+        start_tokens: int = 0,
+        *,
+        clock: Clock = time.monotonic,
+        enabled: bool = True,
+    ):
+        if target_tokens <= 0:
+            raise ValueError("target_tokens must be greater than zero")
+        if start_tokens < 0 or start_tokens > target_tokens:
+            raise ValueError("start_tokens must be within the target range")
         self.target_tokens = target_tokens
-        self.start_tokens = start_tokens
-        self.start_time: Optional[float] = None
-        self.session_tokens_processed: int = 0
-        self.pbar: Optional[tqdm] = tqdm(
-            total=target_tokens,
-            initial=start_tokens,
-            desc="📦 Tokenizing",
-            unit="tok",
-            unit_scale=True,
-            dynamic_ncols=True,
-            leave=True
+        self.current_total = start_tokens
+        self.clock = clock
+        self.rate_meter = RollingRateMeter(self.RATE_WINDOW_SECONDS, clock)
+        self.rate_meter.update(start_tokens)
+        self.last_render_time = float("-inf")
+        self.last_tokens_per_second = 0.0
+        self.last_eta_seconds = 0
+        self.pbar: tqdm | None = None
+        if enabled:
+            self.pbar = tqdm(
+                total=target_tokens,
+                initial=start_tokens,
+                desc="📦 Tokenizing",
+                unit="tok",
+                unit_scale=True,
+                dynamic_ncols=True,
+                leave=True,
+                mininterval=self.RENDER_INTERVAL_SECONDS,
+            )
+
+    def update(
+        self,
+        added_tokens: int,
+        current_total: int,
+        shard_info: str | None = None,
+    ) -> int:
+        if added_tokens < 0:
+            raise ValueError("added_tokens cannot be negative")
+        if current_total < 0:
+            raise ValueError("current_total cannot be negative")
+        observed_delta = current_total - self.current_total
+        if observed_delta != added_tokens:
+            raise ValueError(
+                "added_tokens must equal the change in current_total "
+                f"({added_tokens} != {observed_delta})"
+            )
+        self.current_total = current_total
+
+        snapshot = self.rate_meter.update(current_total)
+        tokens_per_second = snapshot.units_per_second
+        remaining_tokens = max(0, self.target_tokens - current_total)
+        eta_seconds = (
+            int(remaining_tokens / tokens_per_second)
+            if tokens_per_second > 0
+            else 0
         )
+        self.last_tokens_per_second = tokens_per_second
+        self.last_eta_seconds = eta_seconds
 
-    def update(self, added_tokens: int, current_total: int, shard_info: Optional[str] = None):
-        """Update live tqdm tokenization progress, speed, and ETA."""
-        if self.start_time is None:
-            self.start_time = time.time()
-
-        self.session_tokens_processed += added_tokens
-        elapsed = time.time() - self.start_time
-        tok_per_sec = self.session_tokens_processed / elapsed if elapsed > 0 else 0.0
-
-        if tok_per_sec >= 1e6:
-            tok_str = f"{tok_per_sec / 1e6:.2f}M tok/s"
-        elif tok_per_sec >= 1e3:
-            tok_str = f"{tok_per_sec / 1e3:.1f}k tok/s"
-        else:
-            tok_str = f"{tok_per_sec:.0f} tok/s"
-
-        if self.pbar is not None:
-            self.pbar.n = current_total
-            postfix = {"tok/s": tok_str}
+        now = self.clock()
+        should_render = (
+            current_total >= self.target_tokens
+            or now - self.last_render_time >= self.RENDER_INTERVAL_SECONDS
+        )
+        if self.pbar is not None and should_render:
+            self.pbar.n = min(current_total, self.target_tokens)
+            postfix = {
+                "tok/s": format_rate(tokens_per_second, "tok"),
+                "ETA": f"{eta_seconds // 60:d}m" if eta_seconds else "—",
+            }
             if shard_info:
                 postfix["shard"] = shard_info
             self.pbar.set_postfix(postfix, refresh=True)
+            self.last_render_time = now
+        return eta_seconds
 
-    def print_message(self, text: str):
-        """Print clean log message above tqdm bar."""
+    def print_message(self, text: str) -> None:
         if self.pbar is not None:
             self.pbar.write(text)
         else:
             print(text)
 
-    def close(self):
-        """Close tqdm progress bar cleanly."""
+    def close(self) -> None:
+        if self.pbar is not None:
+            self.pbar.close()
+            self.pbar = None
+
+
+class ValidationTelemetry:
+    """Local-only progress and timing for complete validation passes."""
+
+    RATE_WINDOW_SECONDS = 30.0
+    RENDER_INTERVAL_SECONDS = 0.5
+
+    def __init__(
+        self,
+        total_sequences: int,
+        sequence_length: int,
+        accelerator: Accelerator,
+        *,
+        clock: Clock = time.monotonic,
+    ):
+        if total_sequences <= 0:
+            raise ValueError("total_sequences must be greater than zero")
+        if sequence_length <= 0:
+            raise ValueError("sequence_length must be greater than zero")
+        self.total_sequences = total_sequences
+        self.sequence_length = sequence_length
+        self.accelerator = accelerator
+        self.clock = clock
+        self.start_time = clock()
+        self.end_time: float | None = None
+        self.processed_sequences = 0
+        self.rate_meter = RollingRateMeter(self.RATE_WINDOW_SECONDS, clock)
+        self.rate_meter.update(0)
+        self.last_render_time = float("-inf")
+        self.last_tokens_per_second = 0.0
+        self.last_eta_seconds = 0
+        self.pbar: tqdm | None = None
+        if accelerator.is_main_process:
+            self.pbar = tqdm(
+                total=total_sequences,
+                desc="🔎 Full validation",
+                unit="seq",
+                dynamic_ncols=True,
+                leave=True,
+                mininterval=self.RENDER_INTERVAL_SECONDS,
+            )
+
+    @property
+    def elapsed_seconds(self) -> float:
+        end_time = self.end_time if self.end_time is not None else self.clock()
+        return max(0.0, end_time - self.start_time)
+
+    @property
+    def average_tokens_per_second(self) -> float:
+        elapsed = self.elapsed_seconds
+        if elapsed <= 0:
+            return 0.0
+        return self.processed_sequences * self.sequence_length / elapsed
+
+    def update(self, processed_sequences: int, mean_loss: float) -> int:
+        if processed_sequences < self.processed_sequences:
+            raise ValueError("processed_sequences cannot move backwards")
+        self.processed_sequences = processed_sequences
+        processed_tokens = processed_sequences * self.sequence_length
+        snapshot = self.rate_meter.update(processed_tokens)
+        tokens_per_second = snapshot.units_per_second
+        remaining_tokens = max(
+            0,
+            (self.total_sequences - processed_sequences) * self.sequence_length,
+        )
+        eta_seconds = (
+            int(remaining_tokens / tokens_per_second)
+            if tokens_per_second > 0
+            else 0
+        )
+        self.last_tokens_per_second = tokens_per_second
+        self.last_eta_seconds = eta_seconds
+
+        now = self.clock()
+        should_render = (
+            processed_sequences >= self.total_sequences
+            or now - self.last_render_time >= self.RENDER_INTERVAL_SECONDS
+        )
+        if self.pbar is not None and should_render:
+            self.pbar.n = min(processed_sequences, self.total_sequences)
+            self.pbar.set_postfix(
+                {
+                    "loss": f"{mean_loss:.4f}",
+                    "tok/s": format_rate(tokens_per_second, "tok"),
+                    "ETA": f"{eta_seconds // 60:d}m" if eta_seconds else "—",
+                },
+                refresh=True,
+            )
+            self.last_render_time = now
+        return eta_seconds
+
+    def close(self) -> None:
+        if self.end_time is None:
+            self.end_time = self.clock()
         if self.pbar is not None:
             self.pbar.close()
             self.pbar = None

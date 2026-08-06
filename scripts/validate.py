@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import UltronConfig
 from dataset import get_dataloaders
 from model import UltronModel, load_ultron_state_dict
+from telemetry import ValidationTelemetry
 
 
 def sequence_cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -90,14 +91,26 @@ def main() -> None:
 
     total_loss = 0.0
     total_sequences = 0
-    with torch.inference_mode():
-        for inputs, targets in dev_loader:
-            with accelerator.autocast():
-                logits = model(inputs).logits
-                sequence_losses = sequence_cross_entropy(logits, targets)
-            sequence_losses = accelerator.gather_for_metrics(sequence_losses)
-            total_loss += sequence_losses.double().sum().item()
-            total_sequences += sequence_losses.numel()
+    validation_telemetry = ValidationTelemetry(
+        total_sequences=len(dev_loader.dataset),
+        sequence_length=config.T,
+        accelerator=accelerator,
+    )
+    try:
+        with torch.inference_mode():
+            for inputs, targets in dev_loader:
+                with accelerator.autocast():
+                    logits = model(inputs).logits
+                    sequence_losses = sequence_cross_entropy(logits, targets)
+                sequence_losses = accelerator.gather_for_metrics(sequence_losses)
+                total_loss += sequence_losses.double().sum().item()
+                total_sequences += sequence_losses.numel()
+                validation_telemetry.update(
+                    total_sequences,
+                    mean_loss=total_loss / total_sequences,
+                )
+    finally:
+        validation_telemetry.close()
 
     if total_sequences == 0:
         raise RuntimeError("Validation dataloader produced no samples.")
@@ -110,6 +123,10 @@ def main() -> None:
         "sequences": total_sequences,
         "tokens": total_sequences * config.T,
         "checkpoint": str(weight_path),
+        "elapsed_seconds": validation_telemetry.elapsed_seconds,
+        "average_tokens_per_second": (
+            validation_telemetry.average_tokens_per_second
+        ),
     }
 
     if accelerator.is_main_process:
@@ -121,7 +138,8 @@ def main() -> None:
         accelerator.print(
             f"Full validation | loss {mean_loss:.6f} | "
             f"perplexity {result['perplexity']:.4f} | "
-            f"{result['tokens']:,} tokens"
+            f"{result['tokens']:,} tokens | "
+            f"{result['average_tokens_per_second']:,.0f} tok/s"
         )
         accelerator.print(f"Saved results to {args.output}")
 

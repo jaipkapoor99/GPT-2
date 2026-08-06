@@ -1,8 +1,8 @@
 """Tokenize FineWeb-Edu into deterministic, atomically committed shards.
 
-Resume checkpoints store the exact number of source documents consumed plus
-the token buffer left after the last committed shard. Dataset and tokenizer
-revisions are pinned on the first run, so a restart reproduces the same stream.
+Resume checkpoints store the streaming dataset's native cursor plus the token
+buffer left after the last committed shard. Dataset and tokenizer revisions
+are pinned on the first run, so a restart reproduces the same stream.
 """
 
 import argparse
@@ -24,9 +24,6 @@ from config import UltronConfig
 from telemetry import TokenizationTelemetry
 
 
-DATASET_ID = "HuggingFaceFW/fineweb-edu"
-DATASET_CONFIG = "sample-10BT"
-DATASET_SPLIT = "train"
 STATE_SCHEMA_VERSION = 1
 
 
@@ -98,6 +95,7 @@ def _load_resume_state(
     output_dir: Path,
     shard_size_tokens: int,
     max_shards: int,
+    config: UltronConfig,
 ) -> tuple[dict | None, np.ndarray]:
     state_path = output_dir / "tokenization_state.json"
     if not state_path.exists():
@@ -113,9 +111,9 @@ def _load_resume_state(
         state = json.load(file)
     expected = {
         "schema_version": STATE_SCHEMA_VERSION,
-        "dataset_id": DATASET_ID,
-        "dataset_config": DATASET_CONFIG,
-        "dataset_split": DATASET_SPLIT,
+        "dataset_id": config.dataset_id,
+        "dataset_config": config.dataset_config,
+        "dataset_split": config.dataset_split,
         "shard_size_tokens": shard_size_tokens,
         "max_shards": max_shards,
     }
@@ -163,19 +161,19 @@ def _save_resume_state(
 
 
 def _new_state(
+    config: UltronConfig,
     dataset_revision: str,
-    tokenizer_name: str,
     tokenizer_revision: str,
     shard_size_tokens: int,
     max_shards: int,
 ) -> dict:
     return {
         "schema_version": STATE_SCHEMA_VERSION,
-        "dataset_id": DATASET_ID,
-        "dataset_config": DATASET_CONFIG,
-        "dataset_split": DATASET_SPLIT,
+        "dataset_id": config.dataset_id,
+        "dataset_config": config.dataset_config,
+        "dataset_split": config.dataset_split,
         "dataset_revision": dataset_revision,
-        "tokenizer_name": tokenizer_name,
+        "tokenizer_name": config.tokenizer_name,
         "tokenizer_revision": tokenizer_revision,
         "shard_size_tokens": shard_size_tokens,
         "max_shards": max_shards,
@@ -186,6 +184,7 @@ def _new_state(
 
 
 def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
+    config = UltronConfig()
     output_dir = Path("shards_edu")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,16 +192,16 @@ def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
         output_dir,
         shard_size_tokens,
         max_shards,
+        config,
     )
-    config = UltronConfig()
 
     if state is None:
         api = HfApi()
-        dataset_revision = api.dataset_info(DATASET_ID).sha
+        dataset_revision = api.dataset_info(config.dataset_id).sha
         tokenizer_revision = api.model_info(config.tokenizer_name).sha
         state = _new_state(
+            config,
             dataset_revision,
-            config.tokenizer_name,
             tokenizer_revision,
             shard_size_tokens,
             max_shards,
@@ -229,8 +228,18 @@ def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
         revision=state["dataset_revision"],
     )
     documents_consumed = state["source_documents_consumed"]
-    if documents_consumed:
-        raw_dataset = raw_dataset.skip(documents_consumed)
+    dataset_state = state.get("dataset_state")
+    if dataset_state is not None:
+        raw_dataset.load_state_dict(dataset_state)
+        print(
+            "Restored native dataset cursor at "
+            f"{documents_consumed:,} source documents."
+        )
+    elif documents_consumed:
+        raise RuntimeError(
+            "Resume checkpoint is missing its native dataset cursor. "
+            "Start again with an empty shards directory."
+        )
     iterator = iter(raw_dataset)
 
     shard_index = state["next_shard"]
@@ -247,7 +256,7 @@ def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
 
     telemetry = TokenizationTelemetry(
         target_tokens=target_total_tokens,
-        start_tokens=committed_tokens,
+        start_tokens=committed_tokens + len(current_tokens),
     )
     stop_requested = False
 
@@ -318,6 +327,7 @@ def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
                         "next_shard": shard_index,
                         "source_documents_consumed": documents_consumed,
                         "committed_tokens": committed_tokens,
+                        "dataset_state": raw_dataset.state_dict(),
                     }
                 )
                 _save_resume_state(

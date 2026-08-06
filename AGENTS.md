@@ -9,7 +9,7 @@ Large runtime artifacts are intentionally untracked: `shards_edu/`, `accelerate_
 ## Build, Test, and Development Commands
 
 ```bash
-uv venv --python 3.13 .venv
+uv venv --python 3.14.6 .venv
 source .venv/bin/activate
 uv pip install torch==2.13.0
 uv pip install -r requirements.lock
@@ -39,4 +39,4 @@ Pull requests should explain motivation, implementation, verification commands, 
 
 ## Security & Configuration
 
-Pass Hugging Face credentials through `HF_TOKEN`; never commit tokens. Treat optimizer checkpoints and pickle-based state as trusted local artifacts only.
+Pass Hugging Face credentials through `HF_TOKEN`; never commit tokens. `scripts/upload_checkpoint.py` intentionally publishes the complete Accelerate checkpoint, including optimizer and RNG state, so consumers must treat the repository as a trusted training-resume artifact.

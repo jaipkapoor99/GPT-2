@@ -1,7 +1,8 @@
 """
 Ultron (113M) checkpoint uploader script
 
-Uploads the local `accelerate_checkpoint/` directory and documentation to Hugging Face Hub.
+Uploads the complete local `accelerate_checkpoint/` directory—including model,
+optimizer, scheduler, scaler, and RNG state—to Hugging Face Hub.
 
 Usage:
     python3 scripts/upload_checkpoint.py [--repo-id=USER/REPO] [--private]
@@ -42,8 +43,9 @@ def main():
     console.print(f"[bold cyan]🤗 Initializing Hugging Face repository:[/bold cyan] [bold white]{args.repo_id}[/bold white]")
     api.create_repo(repo_id=args.repo_id, exist_ok=True, private=args.private)
 
-    # 1. Upload Checkpoint Directory
-    console.print(f"[bold blue]📦 Uploading checkpoint directory '{args.checkpoint_dir}'...[/bold blue]")
+    # Upload every checkpoint file: this repository is intentionally resumable,
+    # not an inference-only weight export.
+    console.print(f"[bold blue]📦 Uploading complete training state from '{args.checkpoint_dir}'...[/bold blue]")
     api.upload_folder(
         folder_path=args.checkpoint_dir,
         repo_id=args.repo_id,

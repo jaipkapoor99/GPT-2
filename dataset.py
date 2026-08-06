@@ -127,8 +127,10 @@ def get_dataloaders(config: UltronConfig, accelerator):
         f"Sequences Available: {len(train_ds):,} train / {len(dev_ds):,} dev"
     )
     
-    train_loader = DataLoader(train_ds, batch_size=config.B, shuffle=True, num_workers=2, pin_memory=False)
-    dev_loader   = DataLoader(dev_ds, batch_size=config.B, shuffle=False, num_workers=2, pin_memory=False)
+    # Preserve corpus order so checkpoint fast-forwarding is deterministic and
+    # does not require persisting sampler permutations.
+    train_loader = DataLoader(train_ds, batch_size=config.B, num_workers=2, pin_memory=False)
+    dev_loader = DataLoader(dev_ds, batch_size=config.B, num_workers=2, pin_memory=False)
 
     train_loader, dev_loader = accelerator.prepare(
         train_loader, dev_loader

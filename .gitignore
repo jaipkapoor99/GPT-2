@@ -8,8 +8,6 @@ shards_edu/
 *.pt
 *.safetensors
 accelerate_checkpoint/
-gpt2-fineweb-124m/
-gpt2-sota-instruct/
 *.tar.gz
 *.tar
 
@@ -24,6 +22,7 @@ archives/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
 
 # Notebooks

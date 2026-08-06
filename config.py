@@ -19,11 +19,15 @@ class UltronConfig:
     warmup_steps: int = 200     # Warmup steps
     max_steps: int = 152587     # Total training steps (~10B tokens at 65k tokens/step)
     eval_interval: int = 250    # Evaluation interval
+    eval_batches: int = 20      # Batches sampled during frequent validation
 
     rope_base: float = 10000.0  # RoPE frequency base parameter
     logit_softcap: float = 15.0 # Gemma 2 standard logit softcapping (prevents overconfidence)
     vocab_size: int = 49152      # SmolLM BPE Vocab size
     tokenizer_name: str = "HuggingFaceTB/SmolLM2-135M" # Tokenizer Hugging Face identifier
+    dataset_id: str = "HuggingFaceFW/fineweb-edu" # Source dataset Hugging Face identifier
+    dataset_config: str = "sample-10BT" # Source dataset configuration
+    dataset_split: str = "train" # Source dataset split
     hf_repo_id: str = "jaipkapoor99/ultron-113m" # Hugging Face Hub model repository identifier
     hf_dataset_repo_id: str = "jaipkapoor99/ultron-fineweb-edu-shards" # Hugging Face Hub dataset repository identifier
     head_dim: int = field(init=False)

@@ -2,8 +2,14 @@
 
 import numpy as np
 import pytest
+from torch.utils.data import SequentialSampler
 
-from dataset import ZeroCopyShardedDataset, split_train_dev_datasets
+from config import UltronConfig
+from dataset import (
+    ZeroCopyShardedDataset,
+    get_dataloaders,
+    split_train_dev_datasets,
+)
 
 
 def write_shard(path, start, length):
@@ -55,3 +61,28 @@ def test_single_shard_split_leaves_non_overlapping_gap(tmp_path):
     first_dev_token = first_dev_index * 2
 
     assert last_train_token < first_dev_token
+
+
+def test_dataloaders_preserve_sequential_corpus_order(tmp_path, monkeypatch):
+    shard_dir = tmp_path / "shards_edu"
+    shard_dir.mkdir()
+    for index in range(2):
+        write_shard(
+            shard_dir / f"fineweb_edu_shard_{index:05d}.bin",
+            index * 1_000,
+            128,
+        )
+
+    class FakeAccelerator:
+        def print(self, _message):
+            pass
+
+        def prepare(self, *loaders):
+            return loaders
+
+    monkeypatch.chdir(tmp_path)
+    config = UltronConfig(B=2, T=8)
+    train_loader, dev_loader = get_dataloaders(config, FakeAccelerator())
+
+    assert isinstance(train_loader.sampler, SequentialSampler)
+    assert isinstance(dev_loader.sampler, SequentialSampler)

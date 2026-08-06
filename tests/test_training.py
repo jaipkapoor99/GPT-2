@@ -82,8 +82,8 @@ class FakeTelemetry:
     def log_training_step(self, **_kwargs):
         pass
 
-    def log_evaluation(self, step, train_loss, dev_loss, lr, eta_seconds):
-        self.evaluations.append((step, train_loss, dev_loss, lr, eta_seconds))
+    def log_evaluation(self, step, train_loss, dev_loss, lr):
+        self.evaluations.append((step, train_loss, dev_loss, lr))
 
     def get_wandb_run_id(self):
         return None
@@ -104,6 +104,7 @@ def make_trainer(max_steps=2, is_test_mode=True):
         learning_rate=1e-2,
         min_lr=1e-3,
         eval_interval=1,
+        eval_batches=20,
         is_test_mode=is_test_mode,
     )
     model = TinyLanguageModel()

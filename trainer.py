@@ -67,7 +67,7 @@ class UltronTrainer:
         else:
             self.accelerator.print(f"⚠ No checkpoint found at '{self.accelerate_dir}', starting from scratch.")
 
-    def evaluate(self, train_loss, lr, eta_seconds=0):
+    def evaluate(self, train_loss, lr):
         self.model.eval()
         total_dev_loss = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
         total_dev_tokens = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
@@ -80,7 +80,7 @@ class UltronTrainer:
                 total_dev_loss += dev_loss.detach().double() * token_count
                 total_dev_tokens += token_count
                 dev_batches += 1
-                if dev_batches >= 20:
+                if dev_batches >= self.config.eval_batches:
                     break
 
         totals = self.accelerator.reduce(
@@ -93,7 +93,12 @@ class UltronTrainer:
 
         self.print_table_row(self.step, train_loss, avg_dev_loss, lr)
         # This is a sampled estimate capped at 20 validation batches.
-        self.telemetry.log_evaluation(self.step, train_loss, avg_dev_loss, lr, eta_seconds=eta_seconds)
+        self.telemetry.log_evaluation(
+            self.step,
+            train_loss,
+            avg_dev_loss,
+            lr,
+        )
         self.save_checkpoint()
         self.model.train()
 
@@ -166,7 +171,10 @@ class UltronTrainer:
                     
                     if self.accelerator.sync_gradients:
                         self.step += 1
-                        eta_seconds = self.telemetry.update_terminal_progress(self.step, loss=loss.item())
+                        self.telemetry.update_terminal_progress(
+                            self.step,
+                            loss=loss.item(),
+                        )
                         is_eval_step = (self.step % self.config.eval_interval == 0 or self.step == self.config.max_steps)
                         if not is_eval_step:
                             # Non-eval steps: log train metrics only
@@ -174,11 +182,9 @@ class UltronTrainer:
                                 step=self.step,
                                 loss=loss.item(),
                                 lr=lr,
-                                progress_percent=(self.step / self.config.max_steps) * 100,
-                                eta_seconds=eta_seconds
                             )
                         if is_eval_step:
-                            self.evaluate(loss.item(), lr, eta_seconds=eta_seconds)
+                            self.evaluate(loss.item(), lr)
             active_dataloader = self.train_loader
         
         self.telemetry.close()

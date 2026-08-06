@@ -1,7 +1,7 @@
 # Ultron-113M: Modern Transformer Pre-training Pipeline
 
 [![CI](https://github.com/jaipkapoor99/ultron/actions/workflows/ci.yml/badge.svg)](https://github.com/jaipkapoor99/ultron/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.13-EE4C2C?logo=pytorch&logoColor=white)
 
 A high-performance PyTorch implementation of **Ultron-113M** pre-trained from scratch on **10.0 billion tokens** of the **FineWeb-Edu** dataset.
@@ -117,6 +117,7 @@ Ultron-113M Layout:
 - **PyTorch Muon Optimizer:** Built-in `torch.optim.Muon` handles 2D matrix weights, combined with fused `AdamW` for 1D vectors and embeddings.
 - **Rust-Engine Batch Tokenizer:** Sub-process tokenization via Rust `backend_tokenizer.encode_batch` streaming at **~4.34 Million tokens/sec** into compact `uint16` binary shards.
 - **Memory-Mapped Pipeline:** `np.memmap` keeps the 10B-token corpus on disk and copies only each requested window to the `int64` dtype required by PyTorch embeddings.
+- **Deterministic Corpus Order:** Training uses sequential sampling with no shuffle state, making checkpoint fast-forwarding simple and reproducible.
 
 ---
 
@@ -129,6 +130,7 @@ Ultron-113M Layout:
 | **Context Window ($T$)** | 1,024 tokens | Sequence length per pass |
 | **Micro-Batch Size ($B$)** | 16 | Per-GPU micro-batch size |
 | **Gradient Accumulation** | 4 steps | Effective batch size = 64 sequences (65,536 tokens/step) |
+| **Sample Order** | Sequential, no shuffling | Stable corpus order enables deterministic checkpoint fast-forwarding |
 | **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer (`HuggingFaceTB/SmolLM2-135M`) |
 | **Precision** | BFloat16 (`bf16`) | Native mixed precision |
 | **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
@@ -144,13 +146,14 @@ Ultron-113M Layout:
 ```text
 ultron/
 ├── .github/workflows/ci.yml # CPU dependency, compilation, and pytest CI
+├── .python-version         # uv-managed Python 3.14.6 pin
 ├── AGENTS.md               # Contributor and repository guidelines
 ├── model.py                # PyTorch Ultron-113M (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
 ├── config.py               # Model & Hyperparameter Configuration Dataclass
 ├── dataset.py              # Memory-mapped sharded dataset loader
 ├── train.py                # Main Accelerated Distributed Training Runner
 ├── trainer.py              # Training loop with PyTorch Muon + fused AdamW
-├── telemetry.py            # Telemetry & Experiment Tracking Manager (W&B + ETA + Checkpoint state)
+├── telemetry.py            # Rolling throughput, ETA, W&B metrics, and progress UI
 ├── requirements.txt        # Virtual environment dependencies
 ├── requirements.lock       # Reproducible backend-neutral dependency pins
 ├── accelerate_checkpoint/  # Saved Accelerate model weights, optimizer state & RNG seeds
@@ -161,8 +164,10 @@ ultron/
 ├── tests/                  # CPU-safe model, dataset, and training tests
 │   ├── test_dataset.py     # Shard lookup and leakage-safe split tests
 │   ├── test_model.py       # Causality, cache, optimizer, and learning tests
+│   ├── test_telemetry.py   # Rate, ETA, and metric-schema tests
 │   ├── test_tokenize_dataset.py # Exact-resume and atomic-write tests
 │   ├── test_training.py    # Evaluation, resume, and checkpoint-safety tests
+│   ├── test_upload_checkpoint.py # Complete training-state upload tests
 │   ├── test_upload_dataset_shards.py # Upload validation tests
 │   └── test_validate.py    # Full-validation metric tests
 └── scripts/                # Helper Scripts
@@ -181,6 +186,18 @@ ultron/
 - **Model Checkpoint**: [`jaipkapoor99/ultron-113m`](https://huggingface.co/jaipkapoor99/ultron-113m)
 - **Pre-tokenized Dataset Shards**: [`jaipkapoor99/ultron-fineweb-edu-shards`](https://huggingface.co/datasets/jaipkapoor99/ultron-fineweb-edu-shards)
 
+The model repository is a complete training-resume artifact, not an
+inference-only export. Upload the entire Accelerate checkpoint—including model,
+Muon and AdamW optimizer state, scheduler state, scaler state when present, and
+RNG state—with:
+
+```bash
+HF_TOKEN=hf_... python scripts/upload_checkpoint.py
+```
+
+Because Accelerate RNG state can use pickle serialization, download and resume
+only from a repository you trust.
+
 ---
 
 ## 🚀 Quickstart & Workflow Guide
@@ -192,12 +209,14 @@ git clone https://github.com/jaipkapoor99/ultron.git
 cd ultron
 
 # Fast environment setup using uv
-uv venv --python 3.13 .venv
+uv python install 3.14.6
+uv venv --python 3.14.6 .venv
 source .venv/bin/activate
 
 # Install the PyTorch 2.13 wheel for your CUDA/CPU platform first
 uv pip install torch==2.13.0
 uv pip install -r requirements.lock
+uv pip check
 
 # Optional: install if torch.compile cannot locate a CUDA compiler
 uv pip install nvidia-cuda-nvcc
@@ -212,15 +231,27 @@ python scripts/tokenize_dataset.py
 ```
 
 Shards are committed atomically. The tokenizer pins the dataset and tokenizer
-revisions and records the exact source-document cursor plus pending token
-buffer in `shards_edu/tokenization_state.json`, allowing deterministic resume
-after interruption. Existing shards without this state file are rejected.
-Running the same command after an interruption resumes automatically.
+revisions and records the streaming dataset's native file/row cursor plus the
+pending token buffer in `shards_edu/tokenization_state.json`. Resuming from a
+native cursor jumps directly to the next document instead of replaying the
+stream. Existing shards without a complete native-cursor state file are
+rejected.
 
 Check whether tokenization is already running:
 
 ```bash
 pgrep -af '[t]okenize_dataset.py'
+```
+
+For a tokenizer job that survives terminal closure on a systemd-based Linux
+machine:
+
+```bash
+systemd-run --user --unit=ultron-tokenizer --collect \
+  --property=WorkingDirectory="$PWD" \
+  "$PWD/.venv/bin/python" scripts/tokenize_dataset.py
+systemctl --user status ultron-tokenizer
+journalctl --user -fu ultron-tokenizer
 ```
 
 Monitor durable progress:
@@ -270,6 +301,11 @@ Launch pre-training:
 accelerate launch train.py --mode=fresh
 ```
 
+Training and validation both read their shard partitions in deterministic
+sequential order. Neither DataLoader enables shuffling. Checkpoint resume
+therefore fast-forwards by the recorded optimizer step without reconstructing
+or storing sampler permutations.
+
 ---
 
 ## ✅ Tests & Continuous Integration
@@ -280,23 +316,69 @@ Run the CPU-safe test suite locally:
 pytest -q
 ```
 
+The current suite contains 37 passing tests; the optional compiler test is
+skipped unless explicitly enabled.
+
 Run the slower compiler smoke test explicitly:
 
 ```bash
 ULTRON_TEST_COMPILE=1 pytest -q tests/test_model.py -k torch_compile
 ```
 
-Training-time validation deliberately samples 20 dev batches for inexpensive
-monitoring. Run the complete leakage-safe validation partition separately:
+Run the end-to-end CUDA smoke test:
+
+```bash
+accelerate launch train.py --mode=test
+```
+
+Test mode compiles the model, trains for 100 optimizer steps, and runs sampled
+validation against the prepared shards. It does not initialize W&B or write a
+persistent training checkpoint. The Python 3.14.6 environment has been verified
+with PyTorch 2.13 and CUDA 13.0 on an NVIDIA RTX 5090.
+
+Training-time validation deliberately samples `eval_batches=20` dev batches
+for inexpensive monitoring. Run the complete leakage-safe validation partition
+separately:
 
 ```bash
 accelerate launch scripts/validate.py
 ```
 
-The full result, including loss, perplexity, sequence count, and token count,
-is written to `logs/full_validation.json`.
+Full validation uses local-only terminal telemetry for progress, rolling
+throughput, and ETA; it does not initialize W&B or create graphs. The result,
+including loss, perplexity, counts, elapsed time, and average throughput, is
+written to `logs/full_validation.json`.
 
-The workflow at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes and pull requests to `master`. It installs Python 3.13, CPU-only PyTorch 2.13, installs the pinned dependency set, validates dependencies, compiles the Python sources, and runs pytest. Full CUDA training and dataset-dependent evaluation remain local workflows.
+### CI workflow
+
+The workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs for
+pushes and pull requests targeting `master`, and can also be started manually
+with `workflow_dispatch`. Only the newest run for a workflow and Git reference
+continues; an older in-progress run is cancelled. The job has read-only
+repository permissions and a 20-minute timeout.
+
+| Stage | CI behavior |
+| :--- | :--- |
+| Environment | Ubuntu runner with uv-managed Python 3.14.6 |
+| Dependency cache | Keyed from `requirements.txt` and `requirements.lock` |
+| PyTorch | CPU-only PyTorch 2.13 from the official PyTorch wheel index |
+| Locked dependencies | Installs the backend-neutral `requirements.lock` |
+| Dependency validation | Runs `uv pip check` to reject incompatible packages |
+| Syntax validation | Byte-compiles core modules, scripts, and tests |
+| Unit tests | Runs pytest without writing bytecode or `.pytest_cache` |
+
+Reproduce the CI checks locally from an activated environment:
+
+```bash
+uv pip check
+python -m compileall -q \
+  config.py dataset.py model.py telemetry.py train.py trainer.py scripts tests
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider
+```
+
+CI deliberately remains CPU-safe: it does not download dataset shards, run
+full validation, initialize W&B, execute the opt-in compiler test, or launch
+CUDA training. Run those checks locally with the commands above this section.
 
 ---
 
@@ -350,9 +432,11 @@ accelerate launch scripts/eval_lm_harness.py --limit=0
 
 Pre-training metrics are logged live via **Weights & Biases** under the `ultron-pretraining` project.
 
-- **Local Telemetry**: `telemetry.py` records structured metrics through Accelerate and W&B while maintaining terminal progress and checkpoint metadata.
+- **Rolling Performance Estimates**: `telemetry.py` uses monotonic 30-second rolling windows for responsive throughput and ETA estimates instead of increasingly stale session averages. Training throughput counts tokens across every distributed worker.
+- **Throttled Terminal UI**: Training and tokenization progress render at most twice per second, preventing high-frequency updates from flooding captured logs.
 - **Out-of-Order Resumption Resolved**: Solved early telemetry log fragmentation by standardizing `resume="allow"` in `setup_accelerator_trackers()`. W&B runs now resume seamlessly across checkpoint restarts without step monotonicity conflicts.
-- **Metric Grouping & Summaries**: `train/*`, `eval/*`, and `perf/*` metrics are linked to the global step index with `sampled_dev_loss` set to `summary="min"`. Frequent validation metrics are estimates over 20 batches, not full validation passes.
+- **Metric Grouping & Summaries**: Canonical loss, learning-rate, and throughput metrics are linked to the global step without duplicate deprecated keys. Operational values such as ETA, completion percentage, sampled-batch count, and tokens-per-step remain in the terminal or run configuration instead of producing low-value W&B graphs.
+- **Resume Diagnostics**: Malformed W&B checkpoint metadata and tracker-resolution failures emit explicit warnings instead of being silently discarded.
 
 > [!TIP]
 > **Engineering Takeaway — Master W&B & Telemetry Pipeline:**
@@ -396,7 +480,7 @@ Building and pre-training Ultron-113M from scratch provided critical real-world 
 
 ### 2. 🐍 Virtual Environment (`.venv`) & C-Header Management
 
-- **Python Version & C-Header Bottlenecks (`Python.h`)**: `torch.compile()` failed on Python 3.14 due to missing C headers (`Python.h: No such file or directory`). Switching virtual environments to **Python 3.13 via `uv`** provided standalone C-headers natively, eliminating compiler breakage.
+- **Python Version & C-Header Bottlenecks (`Python.h`)**: The system Python 3.14 installation lacked development headers, causing `torch.compile()` to fail with `Python.h: No such file or directory`. Standardizing on uv-managed **Python 3.14.6** supplies the required standalone headers while retaining PyTorch 2.13 compiler support.
 - **Built-in Muon**: PyTorch 2.13 provides `torch.optim.Muon`, so the training stack has no external optimizer dependency.
 
 ### 3. 🚀 High-Throughput Tokenization & Memory Slicing (`np.memmap`)

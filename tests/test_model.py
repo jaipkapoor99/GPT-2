@@ -47,6 +47,7 @@ def test_config_defaults():
     assert config.head_dim == 64
     assert config.vocab_size == 49152
     assert config.grad_accum_steps == 4
+    assert config.eval_batches == 20
 
 
 def test_documented_parameter_count():
