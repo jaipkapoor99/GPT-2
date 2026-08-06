@@ -93,7 +93,7 @@ def test_structured_training_metrics_have_no_legacy_duplicates():
 
     step, metrics = accelerator.logged[0]
     assert step == 3
-    assert metrics["step"] == 3
+    assert "step" not in metrics
     assert metrics["train/loss"] == 2.5
     assert metrics["perf/tokens_per_sec"] == 123
     assert "train_loss" not in metrics
@@ -117,8 +117,6 @@ def test_training_metrics_keep_throughput_and_dev_loss_continuous():
 
     first = accelerator.logged[0][1]
     second = accelerator.logged[1][1]
-    assert first["step"] == 11
-    assert second["step"] == 12
     assert first["perf/tokens_per_sec"] == 240
     assert second["perf/tokens_per_sec"] == 300
     assert first["eval/dev_loss"] == 2.75
@@ -137,11 +135,11 @@ def test_evaluation_logs_interval_average_and_combined_chart(monkeypatch):
     telemetry.log_evaluation(step=3, train_loss=3.0, dev_loss=2.5, lr=1e-3)
 
     _, metrics = accelerator.logged[-1]
-    assert metrics["step"] == 3
+    assert "step" not in metrics
     assert metrics["train/average_loss"] == pytest.approx(3.0)
     assert metrics["eval/dev_loss"] == 2.5
     assert metrics["eval/sampled_dev_loss"] == 2.5
-    assert metrics["charts/train_vs_dev_loss"] is chart
+    assert metrics["train_vs_dev_loss"] is chart
     assert telemetry._loss_history_steps == [3]
     assert telemetry._average_train_loss_history == [pytest.approx(3.0)]
     assert telemetry._dev_loss_history == [2.5]
@@ -154,7 +152,7 @@ def test_evaluation_logs_interval_average_and_combined_chart(monkeypatch):
     assert telemetry._loss_history_steps == [3, 5]
 
 
-def test_metric_definitions_hide_internal_series(monkeypatch):
+def test_metric_definitions_use_native_wandb_step(monkeypatch):
     definitions = []
     fake_wandb = SimpleNamespace(
         define_metric=lambda name, **options: definitions.append((name, options))
@@ -164,11 +162,12 @@ def test_metric_definitions_hide_internal_series(monkeypatch):
     UltronTelemetry._define_wandb_metrics(FakeMainAccelerator())
 
     by_name = {name: options for name, options in definitions}
-    assert by_name["step"]["hidden"] is True
-    assert by_name["train/*"]["step_metric"] == "step"
-    assert by_name["eval/*"]["step_sync"] is True
+    assert "step" not in by_name
+    assert by_name["train/*"] == {}
+    assert by_name["eval/*"] == {}
     assert by_name["eval/sampled_dev_loss"]["hidden"] is True
-    assert by_name["eval/dev_loss"]["goal"] == "minimize"
+    assert by_name["eval/dev_loss"]["summary"] == "min"
+    assert "goal" not in by_name["eval/dev_loss"]
 
 
 def test_wandb_run_id_uses_unwrapped_tracker():

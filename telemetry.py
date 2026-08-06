@@ -85,12 +85,11 @@ class UltronTelemetry:
     """W&B metrics, rolling throughput, ETA, and terminal progress."""
 
     PROJECT_NAME = "ultron-pretraining"
-    STEP_METRIC = "step"
     TRAIN_LOSS_METRIC = "train/loss"
     AVERAGE_TRAIN_LOSS_METRIC = "train/average_loss"
     DEV_LOSS_METRIC = "eval/dev_loss"
     SAMPLED_DEV_LOSS_METRIC = "eval/sampled_dev_loss"
-    LOSS_COMPARISON_CHART = "charts/train_vs_dev_loss"
+    LOSS_COMPARISON_CHART = "train_vs_dev_loss"
     TOKENS_PER_SECOND_METRIC = "perf/tokens_per_sec"
     STEPS_PER_SECOND_METRIC = "perf/steps_per_sec"
     RATE_WINDOW_SECONDS = 30.0
@@ -178,42 +177,25 @@ class UltronTelemetry:
         try:
             import wandb
 
-            wandb.define_metric(UltronTelemetry.STEP_METRIC, hidden=True)
-            wandb.define_metric(
-                "train/*",
-                step_metric=UltronTelemetry.STEP_METRIC,
-                step_sync=True,
-            )
-            wandb.define_metric(
-                "eval/*",
-                step_metric=UltronTelemetry.STEP_METRIC,
-                step_sync=True,
-            )
-            wandb.define_metric(
-                "perf/*",
-                step_metric=UltronTelemetry.STEP_METRIC,
-                step_sync=True,
-            )
+            wandb.define_metric("train/*")
+            wandb.define_metric("eval/*")
+            wandb.define_metric("perf/*")
             wandb.define_metric(
                 UltronTelemetry.TRAIN_LOSS_METRIC,
                 summary="last",
-                goal="minimize",
             )
             wandb.define_metric(
                 UltronTelemetry.AVERAGE_TRAIN_LOSS_METRIC,
                 summary="min",
-                goal="minimize",
             )
             wandb.define_metric(
                 UltronTelemetry.DEV_LOSS_METRIC,
                 summary="min",
-                goal="minimize",
             )
             wandb.define_metric(
                 UltronTelemetry.SAMPLED_DEV_LOSS_METRIC,
                 hidden=True,
                 summary="min",
-                goal="minimize",
             )
         except (ImportError, RuntimeError) as error:
             warnings.warn(
@@ -318,9 +300,7 @@ class UltronTelemetry:
             self.pbar = None
 
     def log_step(self, metrics: Mapping[str, Any], step: int) -> None:
-        payload = dict(metrics)
-        payload[self.STEP_METRIC] = step
-        self.accelerator.log(payload, step=step)
+        self.accelerator.log(dict(metrics), step=step)
 
     def _performance_metrics(self) -> dict[str, float]:
         return {
@@ -358,7 +338,7 @@ class UltronTelemetry:
                 title="Average Train Loss vs Sampled Dev Loss",
                 xname="Optimizer step",
             )
-        except (ImportError, RuntimeError, ValueError) as error:
+        except (ImportError, IndexError, RuntimeError, TypeError, ValueError) as error:
             if not self._chart_warning_emitted:
                 warnings.warn(
                     f"W&B loss comparison chart could not be built: {error}",
