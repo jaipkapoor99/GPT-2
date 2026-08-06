@@ -1,9 +1,11 @@
 """CPU-safe training-loop and checkpoint regression tests."""
 
 from contextlib import nullcontext
+import json
 import os
 from types import SimpleNamespace
 
+import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -38,6 +40,7 @@ class FakeAccelerator:
     def __init__(self):
         self.skipped_batches = None
         self.saved = 0
+        self.loaded = 0
 
     def accumulate(self, _model):
         return nullcontext()
@@ -62,6 +65,9 @@ class FakeAccelerator:
     def save_state(self, directory):
         self.saved += 1
         os.makedirs(directory, exist_ok=True)
+
+    def load_state(self, _directory):
+        self.loaded += 1
 
     def wait_for_everyone(self):
         pass
@@ -146,11 +152,58 @@ def test_resume_skips_consumed_batches():
     assert trainer.step == 2
 
 
+@pytest.mark.parametrize(
+    ("step", "expected"),
+    [(0, (0, 0)), (1, (0, 1)), (3, (0, 3)), (4, (1, 0)), (9, (2, 1))],
+)
+def test_data_position_crosses_shuffle_epochs_exactly(step, expected):
+    trainer = make_trainer(max_steps=10)
+
+    assert trainer._data_position(step) == expected
+
+    with pytest.raises(ValueError, match="negative"):
+        trainer._data_position(-1)
+
+
+def test_sampled_validation_rotates_and_wraps_batches():
+    trainer = make_trainer()
+    trainer.config.eval_batches = 2
+    expected = list(trainer.dev_loader)
+
+    first = list(trainer._sample_dev_batches())
+    second = list(trainer._sample_dev_batches())
+    wrapped = list(trainer._sample_dev_batches())
+
+    assert torch.equal(first[0][0], expected[0][0])
+    assert torch.equal(first[1][0], expected[1][0])
+    assert torch.equal(second[0][0], expected[2][0])
+    assert torch.equal(second[1][0], expected[3][0])
+    assert torch.equal(wrapped[0][0], expected[0][0])
+    assert trainer.dev_batch_cursor == 2
+
+
 def test_custom_test_length_remains_checkpoint_safe():
     config = build_config(SimpleNamespace(mode="test", max_steps=7))
 
     assert config.is_test_mode is True
     assert config.max_steps == 7
+
+
+def test_learning_rate_schedule_hits_warmup_stable_and_decay_boundaries():
+    trainer = make_trainer(max_steps=10)
+    trainer.config.warmup_steps = 2
+    trainer.config.learning_rate = 1e-2
+    trainer.config.min_lr = 1e-3
+    trainer.decay_start_step = 8
+
+    trainer.step = 0
+    assert trainer.update_learning_rate() == 5e-3
+    trainer.step = 2
+    assert trainer.update_learning_rate() == 1e-2
+    trainer.step = 8
+    assert trainer.update_learning_rate() == pytest.approx(1e-2)
+    trainer.step = 10
+    assert trainer.update_learning_rate() == pytest.approx(1e-3)
 
 
 def test_total_training_tokens_come_from_runtime_configuration():
@@ -171,6 +224,42 @@ def test_only_main_process_writes_checkpoint_metadata(tmp_path):
     assert not state_file.exists()
 
     trainer.accelerator.is_main_process = True
+    trainer.step = 7
+    trainer.dev_batch_cursor = 3
     trainer.save_checkpoint()
 
     assert state_file.exists()
+    state = json.loads(state_file.read_text())
+    assert state["step"] == 7
+    assert state["max_steps"] == trainer.config.max_steps
+    assert state["data_seed"] == trainer.config.data_seed
+    assert state["dev_batch_cursor"] == 3
+
+
+def test_checkpoint_load_restores_step_and_validation_cursor(tmp_path):
+    trainer = make_trainer()
+    trainer.accelerate_dir = str(tmp_path / "checkpoint")
+    os.makedirs(trainer.accelerate_dir)
+    state_file = tmp_path / "checkpoint" / "training_state.json"
+    state_file.write_text(
+        json.dumps({"step": 9, "dev_batch_cursor": 6})
+    )
+
+    trainer.load_checkpoint()
+
+    assert trainer.accelerator.loaded == 1
+    assert trainer.step == 9
+    assert trainer.dev_batch_cursor == 2
+
+
+def test_checkpoint_load_rejects_shuffle_seed_drift(tmp_path):
+    trainer = make_trainer()
+    trainer.accelerate_dir = str(tmp_path / "checkpoint")
+    os.makedirs(trainer.accelerate_dir)
+    state_file = tmp_path / "checkpoint" / "training_state.json"
+    state_file.write_text(
+        json.dumps({"step": 1, "data_seed": trainer.config.data_seed + 1})
+    )
+
+    with pytest.raises(RuntimeError, match="data_seed"):
+        trainer.load_checkpoint()

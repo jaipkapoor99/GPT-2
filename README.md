@@ -130,7 +130,7 @@ Ultron-113M Layout:
 | **Context Window ($T$)** | 1,024 tokens | Sequence length per pass |
 | **Micro-Batch Size ($B$)** | 16 | Per-GPU micro-batch size |
 | **Gradient Accumulation** | 4 steps | Effective batch size = 64 sequences (65,536 tokens/step) |
-| **Sample Order** | Sequential, no shuffling | Stable corpus order enables deterministic checkpoint fast-forwarding |
+| **Sample Order** | Deterministic epoch shuffle | Seeded permutations diversify batches; stride equals context length, so windows do not overlap |
 | **Tokenizer** | SmolLM Vocab (49,152) | Efficient BPE tokenizer (`HuggingFaceTB/SmolLM2-135M`) |
 | **Precision** | BFloat16 (`bf16`) | Native mixed precision |
 | **LR Schedule** | WSD | Warmup-Stable-Linear-Decay (80% stable, 20% linear decay) |
@@ -148,6 +148,7 @@ ultron/
 ├── .github/workflows/ci.yml # CPU dependency, compilation, and pytest CI
 ├── .python-version         # uv-managed Python 3.14.6 pin
 ├── AGENTS.md               # Contributor and repository guidelines
+├── JOURNEY.md              # Engineering lessons and major corrections
 ├── model.py                # PyTorch Ultron-113M (RoPE + GQA + SwiGLU + RMSNorm + QKNorm + Logit SoftCap)
 ├── config.py               # Model & Hyperparameter Configuration Dataclass
 ├── dataset.py              # Memory-mapped sharded dataset loader
@@ -322,8 +323,11 @@ Run the CPU-safe test suite locally:
 pytest -q
 ```
 
-The current suite contains 37 passing tests; the optional compiler test is
-skipped unless explicitly enabled.
+The current suite contains 91 passing CPU-safe tests. It covers model
+causality and caching, optimizer partitioning, non-overlapping dataset windows,
+deterministic shuffle epochs, exact checkpoint positioning, rotating validation,
+telemetry summaries, tokenization corruption, shard validation, and upload
+guards. The optional compiler test is skipped unless explicitly enabled.
 
 Run the slower compiler smoke test explicitly:
 
@@ -343,7 +347,9 @@ persistent training checkpoint. The Python 3.14.6 environment has been verified
 with PyTorch 2.13 and CUDA 13.0 on an NVIDIA RTX 5090.
 
 Training-time validation deliberately samples `eval_batches=20` dev batches
-for inexpensive monitoring. Run the complete leakage-safe validation partition
+for inexpensive monitoring. The sampled window advances after every evaluation,
+wraps at the end of the dev loader, and is restored from checkpoints instead of
+repeating the first batches. Run the complete leakage-safe validation partition
 separately:
 
 ```bash
@@ -441,7 +447,8 @@ Pre-training metrics are logged live via **Weights & Biases** under the `ultron-
 - **Rolling Performance Estimates**: `telemetry.py` uses monotonic 30-second rolling windows for responsive throughput and ETA estimates instead of increasingly stale session averages. Training throughput counts tokens across every distributed worker.
 - **Throttled Terminal UI**: Training and tokenization progress render at most twice per second, preventing high-frequency updates from flooding captured logs.
 - **Out-of-Order Resumption Resolved**: Solved early telemetry log fragmentation by standardizing `resume="allow"` in `setup_accelerator_trackers()`. W&B runs now resume seamlessly across checkpoint restarts without step monotonicity conflicts.
-- **Metric Grouping & Summaries**: Canonical loss, learning-rate, and throughput metrics are linked to the global step without duplicate deprecated keys. Operational values such as ETA, completion percentage, sampled-batch count, and tokens-per-step remain in the terminal or run configuration instead of producing low-value W&B graphs.
+- **Metric Grouping & Summaries**: Canonical loss, learning-rate, and throughput metrics use W&B's native step axis without an unwanted step chart. The run summary is populated explicitly with steps, processed and planned tokens, progress, current and best losses, learning rate, throughput, and validation count.
+- **Loss Monitoring**: Throughput and held sampled dev loss remain continuous, while interval-average train loss and sampled dev loss share a comparison chart. The raw sampled estimate remains separately available without dashboard clutter.
 - **Resume Diagnostics**: Malformed W&B checkpoint metadata and tracker-resolution failures emit explicit warnings instead of being silently discarded.
 
 > [!TIP]
@@ -493,7 +500,9 @@ Building and pre-training Ultron-113M from scratch provided critical real-world 
 
 - **Rust Batch Tokenization Speedup**: Replacing Python `for`-loop tokenization with Rust `backend_tokenizer.encode_batch` (`num_threads=1` per worker process) increased dataset streaming speed by **>100x** from 40k tok/s to **~4.34 Million tokens/sec**!
 - **Bounded Sample Reads**: Pre-tokenizing into contiguous 100M-token `uint16` shards allows memory-mapped access while allocating only the requested window and its `int64` conversion during training.
+- **Non-Overlapping, Shuffled Windows**: Dataset stride equals the 1,024-token context length. A seeded per-epoch sampler restores gradient diversity without duplicating 75% of every adjacent window, and resume reconstructs the exact epoch and batch offset.
 - **Leakage-Safe Validation**: Training and validation are split at shard boundaries, preventing overlapping token windows from crossing dataset partitions.
+- **Rotating Sampled Validation**: Frequent evaluation advances through the dev loader rather than repeatedly scoring its first 20 batches; the cursor is checkpointed and wraps deterministically.
 
 ---
 

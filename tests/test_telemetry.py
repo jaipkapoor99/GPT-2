@@ -1,6 +1,7 @@
 """Telemetry calculation and metric-schema tests."""
 
 from datetime import datetime, timezone
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -68,6 +69,19 @@ def test_rolling_rate_uses_recent_cumulative_samples():
     assert meter.update(140).units_per_second == pytest.approx(20)
     clock.advance(20)
     assert meter.update(240).units_per_second == pytest.approx(5)
+
+
+def test_rolling_rate_rejects_invalid_window_and_resets_on_counter_rewind():
+    with pytest.raises(ValueError, match="greater than zero"):
+        RollingRateMeter(window_seconds=0)
+
+    clock = FakeClock()
+    meter = RollingRateMeter(window_seconds=10, clock=clock)
+    meter.update(100)
+    clock.advance(2)
+    assert meter.update(120).units_per_second == 10
+    clock.advance(1)
+    assert meter.update(5).units_per_second == 0
 
 
 def test_training_throughput_counts_all_workers():
@@ -202,6 +216,11 @@ def test_wandb_summary_contains_run_totals_and_live_results(monkeypatch):
     assert accelerator.run.summary["best/dev_loss"] == 2.5
     assert accelerator.run.summary["validation/evaluations"] == 1
 
+    telemetry.log_evaluation(step=3, train_loss=3.2, dev_loss=2.8, lr=8e-4)
+    assert accelerator.run.summary["latest/dev_loss"] == 2.8
+    assert accelerator.run.summary["best/dev_loss"] == 2.5
+    assert accelerator.run.summary["validation/evaluations"] == 2
+
 
 def test_tokenization_eta_and_validation():
     clock = FakeClock()
@@ -223,6 +242,19 @@ def test_tokenization_eta_and_validation():
         telemetry.update(added_tokens=5, current_total=310)
 
 
+@pytest.mark.parametrize(
+    ("target", "start"),
+    [(0, 0), (-1, 0), (10, -1), (10, 11)],
+)
+def test_tokenization_telemetry_rejects_invalid_bounds(target, start):
+    with pytest.raises(ValueError):
+        TokenizationTelemetry(
+            target_tokens=target,
+            start_tokens=start,
+            enabled=False,
+        )
+
+
 def test_validation_telemetry_reports_local_timing_and_throughput():
     clock = FakeClock()
     accelerator = FakeAccelerator()
@@ -242,10 +274,21 @@ def test_validation_telemetry_reports_local_timing_and_throughput():
     assert telemetry.elapsed_seconds == 2
     assert eta == 3
 
+    with pytest.raises(ValueError, match="backwards"):
+        telemetry.update(processed_sequences=3, mean_loss=2.0)
+
 
 @pytest.mark.parametrize(
     ("rate", "expected"),
-    [(0, "— tok/s"), (1_500, "1.5k tok/s"), (2_500_000, "2.50M tok/s")],
+    [
+        (0, "— tok/s"),
+        (-1, "— tok/s"),
+        (math.nan, "— tok/s"),
+        (math.inf, "— tok/s"),
+        (1_500, "1.5k tok/s"),
+        (2_500_000, "2.50M tok/s"),
+        (3_000_000_000, "3.00G tok/s"),
+    ],
 )
 def test_format_rate(rate, expected):
     assert format_rate(rate, "tok") == expected

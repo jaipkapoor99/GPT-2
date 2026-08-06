@@ -66,6 +66,31 @@ def test_forward_shape_and_loss(model):
     assert torch.isfinite(output.loss)
 
 
+def test_forward_rejects_context_longer_than_configured(model):
+    inputs = torch.randint(
+        0,
+        model.config.vocab_size,
+        (1, model.config.T + 1),
+    )
+
+    with pytest.raises(AssertionError, match="Cannot forward sequence length"):
+        model(inputs)
+
+
+def test_loss_ignores_masked_targets(model):
+    inputs = torch.randint(0, model.config.vocab_size, (1, 6))
+    targets = torch.randint(0, model.config.vocab_size, (1, 6))
+    targets[:, -2:] = -1
+
+    output = model(inputs, targets=targets)
+    expected = F.cross_entropy(
+        output.logits[:, :-2].reshape(-1, output.logits.size(-1)),
+        targets[:, :-2].reshape(-1),
+    )
+
+    torch.testing.assert_close(output.loss, expected)
+
+
 def test_future_tokens_do_not_change_prefix_logits(model):
     inputs = torch.randint(0, model.config.vocab_size, (2, 12))
     changed = inputs.clone()
@@ -126,6 +151,31 @@ def test_checkpoint_loader_rejects_other_missing_keys(model):
         load_ultron_state_dict(UltronModel(tiny_config()), state_dict)
 
 
+def test_checkpoint_loader_accepts_compiled_prefixes(model):
+    state_dict = {
+        f"_orig_mod.{key}": value
+        for key, value in model.state_dict().items()
+    }
+    restored = UltronModel(tiny_config())
+
+    missing, unexpected = load_ultron_state_dict(restored, state_dict)
+
+    assert missing == []
+    assert unexpected == []
+    torch.testing.assert_close(
+        restored.transformer.wte.weight,
+        model.transformer.wte.weight,
+    )
+
+
+def test_checkpoint_loader_rejects_unexpected_keys(model):
+    state_dict = dict(model.state_dict())
+    state_dict["not_a_real_parameter"] = torch.zeros(1)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        load_ultron_state_dict(UltronModel(tiny_config()), state_dict)
+
+
 def test_optimizer_partition_is_complete_and_disjoint(model):
     partitions = model.partition_optimizer_parameters()
     grouped = [parameter for group in partitions.values() for parameter in group]
@@ -142,11 +192,29 @@ def test_optimizer_partition_is_complete_and_disjoint(model):
 
 
 def test_uses_official_muon(model):
-    optimizer_muon, _ = model.configure_optimizers(model.config.learning_rate)
+    optimizer_muon, optimizer_adamw = model.configure_optimizers(
+        model.config.learning_rate
+    )
     assert isinstance(optimizer_muon, torch.optim.Muon)
     assert optimizer_muon.param_groups[0]["nesterov"] is True
     assert optimizer_muon.param_groups[0]["ns_steps"] == 5
     assert optimizer_muon.param_groups[0]["weight_decay"] == 0.0
+    assert [group["weight_decay"] for group in optimizer_adamw.param_groups] == [
+        0.1,
+        0.0,
+    ]
+
+
+def test_generation_preserves_batch_and_returns_valid_token_ids(model):
+    torch.manual_seed(11)
+    prompt = torch.randint(0, model.config.vocab_size, (2, 5))
+
+    generated = model.generate(prompt, max_new_tokens=3, top_k=5)
+
+    assert generated.shape == (2, 8)
+    assert torch.equal(generated[:, :5], prompt)
+    assert generated.min() >= 0
+    assert generated.max() < model.config.vocab_size
 
 
 def test_repeated_batch_can_be_learned():
@@ -192,6 +260,18 @@ def test_rotary_embedding_preserves_shape(model):
     cosine, sine = model.rotary_emb(query, 16)
     rotated = apply_rotary_emb(query, cosine, sine)
     assert rotated.shape == query.shape
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"C": 30, "n_head": 4, "n_kv_head": 2},
+        {"C": 32, "n_head": 4, "n_kv_head": 3},
+    ],
+)
+def test_config_rejects_incompatible_attention_dimensions(overrides):
+    with pytest.raises(AssertionError):
+        tiny_config(**overrides)
 
 
 @pytest.mark.skipif(

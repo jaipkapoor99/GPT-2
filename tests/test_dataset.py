@@ -32,6 +32,48 @@ def test_shard_lookup_handles_boundaries_and_negative_indices(tmp_path):
         _ = dataset[len(dataset)]
 
 
+def test_default_stride_produces_adjacent_non_overlapping_windows(tmp_path):
+    shard = write_shard(tmp_path / "tokens.bin", 0, 17)
+    dataset = ZeroCopyShardedDataset([shard], sequence_length=4)
+
+    assert dataset.step == 4
+    assert len(dataset) == 4
+    assert dataset[0][0].tolist() == [0, 1, 2, 3]
+    assert dataset[1][0].tolist() == [4, 5, 6, 7]
+    assert dataset[-1][1].tolist() == [13, 14, 15, 16]
+
+
+@pytest.mark.parametrize(
+    ("sequence_length", "step"),
+    [(0, None), (-1, None), (4, 0), (4, -1)],
+)
+def test_dataset_rejects_invalid_window_geometry(
+    tmp_path,
+    sequence_length,
+    step,
+):
+    shard = write_shard(tmp_path / "tokens.bin", 0, 20)
+
+    with pytest.raises(ValueError, match="greater than zero"):
+        ZeroCopyShardedDataset(
+            [shard],
+            sequence_length=sequence_length,
+            step=step,
+        )
+
+
+def test_windows_never_cross_shard_boundaries(tmp_path):
+    shards = [
+        write_shard(tmp_path / "first.bin", 0, 13),
+        write_shard(tmp_path / "second.bin", 100, 13),
+    ]
+    dataset = ZeroCopyShardedDataset(shards, sequence_length=4)
+
+    assert len(dataset) == 6
+    assert dataset[2][0].tolist() == [8, 9, 10, 11]
+    assert dataset[3][0].tolist() == [100, 101, 102, 103]
+
+
 def test_multiple_shards_split_at_shard_boundary(tmp_path):
     shards = [
         write_shard(tmp_path / f"{index}.bin", index * 100, 20)
@@ -105,3 +147,6 @@ def test_epoch_random_sampler_is_reproducible_and_changes_each_epoch():
     second.set_epoch(1)
     assert list(first) == list(second)
     assert list(first) != epoch_zero
+
+    with pytest.raises(ValueError, match="negative"):
+        first.set_epoch(-1)

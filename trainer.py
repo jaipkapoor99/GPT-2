@@ -17,10 +17,16 @@ class UltronTrainer:
         
         self.accelerate_dir = "accelerate_checkpoint"
         self.step = 0
+        self.dev_batch_cursor = 0
         self.decay_start_step = int(0.8 * config.max_steps)
         self.telemetry = UltronTelemetry(config, accelerator, checkpoint_dir=self.accelerate_dir)
         self.tokens_per_step = self.telemetry.global_tokens_per_step
         self.total_training_tokens = self.tokens_per_step * config.max_steps
+        if len(self.train_loader) % accelerator.gradient_accumulation_steps:
+            raise ValueError(
+                "Training dataloader batches per epoch must be divisible by "
+                "gradient_accumulation_steps for exact resume"
+            )
 
     def print_rich(self, msg: str):
         if hasattr(self, "telemetry") and self.telemetry is not None:
@@ -62,11 +68,58 @@ class UltronTrainer:
             if os.path.exists(state_file):
                 with open(state_file, "r") as f:
                     state_info = json.load(f)
+                    checkpoint_seed = state_info.get("data_seed")
+                    if (
+                        checkpoint_seed is not None
+                        and checkpoint_seed != self.config.data_seed
+                    ):
+                        raise RuntimeError(
+                            "Checkpoint data_seed does not match the current "
+                            "configuration"
+                        )
                     self.step = state_info.get("step", 0)
+                    self.dev_batch_cursor = (
+                        state_info.get("dev_batch_cursor", 0)
+                        % max(1, len(self.dev_loader))
+                    )
                     self.accelerator.print(f"✓ Restored training step: {self.step:,}")
             self.accelerator.print(f"✓ State restored successfully!")
         else:
             self.accelerator.print(f"⚠ No checkpoint found at '{self.accelerate_dir}', starting from scratch.")
+
+    def _sample_dev_batches(self):
+        """Yield the next deterministic window of validation batches."""
+        total_batches = len(self.dev_loader)
+        if total_batches == 0:
+            raise RuntimeError("Validation dataloader contains no batches")
+
+        target_batches = min(self.config.eval_batches, total_batches)
+        remaining = target_batches
+        while remaining > 0:
+            available = total_batches - self.dev_batch_cursor
+            segment_size = min(remaining, available)
+            segment_loader = self.dev_loader
+            if self.dev_batch_cursor:
+                segment_loader = self.accelerator.skip_first_batches(
+                    self.dev_loader,
+                    self.dev_batch_cursor,
+                )
+
+            consumed = 0
+            for batch in segment_loader:
+                yield batch
+                consumed += 1
+                self.dev_batch_cursor = (
+                    self.dev_batch_cursor + 1
+                ) % total_batches
+                if consumed >= segment_size:
+                    break
+            if consumed != segment_size:
+                raise RuntimeError(
+                    "Validation dataloader ended before the sampled window "
+                    "was complete"
+                )
+            remaining -= consumed
 
     def evaluate(self, train_loss, lr):
         self.model.eval()
@@ -74,15 +127,13 @@ class UltronTrainer:
         total_dev_tokens = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
         dev_batches = 0
         with torch.no_grad():
-            for xb_dev, yb_dev in self.dev_loader:
+            for xb_dev, yb_dev in self._sample_dev_batches():
                 dev_out = self.model(xb_dev, yb_dev)
                 dev_loss = dev_out.loss if (hasattr(dev_out, "loss") and dev_out.loss is not None) else dev_out[1]
                 token_count = yb_dev.numel()
                 total_dev_loss += dev_loss.detach().double() * token_count
                 total_dev_tokens += token_count
                 dev_batches += 1
-                if dev_batches >= self.config.eval_batches:
-                    break
 
         totals = self.accelerator.reduce(
             torch.stack((total_dev_loss, total_dev_tokens)),
@@ -115,6 +166,7 @@ class UltronTrainer:
             "step": self.step,
             "max_steps": self.config.max_steps,
             "data_seed": self.config.data_seed,
+            "dev_batch_cursor": self.dev_batch_cursor,
         }
         run_id = self.telemetry.get_wandb_run_id()
         if run_id:
@@ -137,11 +189,7 @@ class UltronTrainer:
         self.print_rich(f"[bold yellow]⚡ Pre-training for {self.config.max_steps:,} steps ({self.total_training_tokens:,} total tokens)...[/bold yellow]\n")
         # Training loop without tqdm progress bar
         
-        batches_per_epoch = len(self.train_loader)
-        consumed_batches = (
-            self.step * self.accelerator.gradient_accumulation_steps
-        )
-        data_epoch, skip_count = divmod(consumed_batches, batches_per_epoch)
+        data_epoch, skip_count = self._data_position(self.step)
 
         if self.step > 0:
             self.print_rich(f"[bold yellow]⏩ Fast-forwarding dataset past {skip_count:,} batches...[/bold yellow]")
@@ -205,3 +253,12 @@ class UltronTrainer:
         self.telemetry.close()
         self.print_rich("\n[bold green]🎉 Pre-training Complete![/bold green]")
         self.save_checkpoint(final=True)
+
+    def _data_position(self, step: int) -> tuple[int, int]:
+        """Return deterministic shuffle epoch and batch offset for a step."""
+        if step < 0:
+            raise ValueError("step cannot be negative")
+        consumed_batches = (
+            step * self.accelerator.gradient_accumulation_steps
+        )
+        return divmod(consumed_batches, len(self.train_loader))

@@ -88,3 +88,65 @@ def test_complete_state_is_detected_without_reopening_dataset():
 
     assert _is_tokenization_complete(state, 8, 2)
     assert not _is_tokenization_complete(state, 8, 3)
+
+
+def test_resume_rejects_configuration_drift(tmp_path):
+    state = make_state()
+    _save_resume_state(tmp_path, state, [], previous_pending_file=None)
+    changed_config = UltronConfig(dataset_config="different-config")
+
+    with pytest.raises(RuntimeError, match="configuration mismatch"):
+        _load_resume_state(tmp_path, 8, 2, changed_config)
+
+
+def test_resume_rejects_missing_or_corrupt_pending_buffer(tmp_path):
+    state = make_state()
+    _save_resume_state(tmp_path, state, [1, 2], previous_pending_file=None)
+    pending_path = tmp_path / ".pending_tokens_0000.npy"
+
+    pending_path.unlink()
+    with pytest.raises(RuntimeError, match="buffer is missing"):
+        _load_resume_state(tmp_path, 8, 2, UltronConfig())
+
+    np.save(pending_path, np.array([1, 2], dtype=np.int64))
+    with pytest.raises(RuntimeError, match="does not match"):
+        _load_resume_state(tmp_path, 8, 2, UltronConfig())
+
+
+def test_resume_rejects_inconsistent_committed_metadata(tmp_path):
+    state = make_state()
+    _atomic_shard_write(
+        tmp_path / "fineweb_edu_shard_0000.bin",
+        np.arange(8, dtype=np.uint16),
+    )
+    _atomic_json_write(
+        tmp_path / "fineweb_edu_shard_0000_meta.json",
+        {"shard_index": 7, "tokens": 8, "dtype": "uint16"},
+    )
+    state.update({"next_shard": 1, "committed_tokens": 8})
+    _save_resume_state(tmp_path, state, [], previous_pending_file=None)
+
+    with pytest.raises(RuntimeError, match="Metadata is invalid"):
+        _load_resume_state(tmp_path, 8, 2, UltronConfig())
+
+
+def test_new_pending_checkpoint_removes_superseded_buffer(tmp_path):
+    state = make_state()
+    _save_resume_state(tmp_path, state, [1], previous_pending_file=None)
+    old_pending = tmp_path / ".pending_tokens_0000.npy"
+    assert old_pending.exists()
+
+    state["next_shard"] = 1
+    _save_resume_state(
+        tmp_path,
+        state,
+        [2, 3],
+        previous_pending_file=old_pending.name,
+    )
+
+    assert not old_pending.exists()
+    assert np.load(
+        tmp_path / ".pending_tokens_0001.npy",
+        allow_pickle=False,
+    ).tolist() == [2, 3]
+    assert not list(tmp_path.glob("*.tmp"))

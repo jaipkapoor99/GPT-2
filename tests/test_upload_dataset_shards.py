@@ -59,3 +59,54 @@ def test_inconsistent_metadata_is_rejected(tmp_path):
 
     with pytest.raises(RuntimeError, match="inconsistent"):
         validate_complete_shard_set(tmp_path)
+
+
+def test_missing_state_is_rejected(tmp_path):
+    with pytest.raises(RuntimeError, match="Missing exact tokenization state"):
+        validate_complete_shard_set(tmp_path)
+
+
+@pytest.mark.parametrize("missing_kind", ["shard", "metadata"])
+def test_missing_committed_files_are_rejected(tmp_path, missing_kind):
+    write_complete_set(tmp_path)
+    if missing_kind == "shard":
+        (tmp_path / "fineweb_edu_shard_0001.bin").unlink()
+        expected = "missing or has an invalid size"
+    else:
+        (tmp_path / "fineweb_edu_shard_0001_meta.json").unlink()
+        expected = "Metadata.*missing"
+
+    with pytest.raises(RuntimeError, match=expected):
+        validate_complete_shard_set(tmp_path)
+
+
+def test_wrong_shard_size_is_rejected(tmp_path):
+    write_complete_set(tmp_path)
+    (tmp_path / "fineweb_edu_shard_0001.bin").write_bytes(b"short")
+
+    with pytest.raises(RuntimeError, match="invalid size"):
+        validate_complete_shard_set(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dtype", "int32"),
+        ("tokens", 7),
+        ("shard_index", 99),
+        ("tokenizer_revision", "wrong"),
+    ],
+)
+def test_every_metadata_contract_field_is_validated(
+    tmp_path,
+    field,
+    value,
+):
+    write_complete_set(tmp_path)
+    path = tmp_path / "fineweb_edu_shard_0001_meta.json"
+    metadata = json.loads(path.read_text())
+    metadata[field] = value
+    path.write_text(json.dumps(metadata))
+
+    with pytest.raises(RuntimeError, match="inconsistent"):
+        validate_complete_shard_set(tmp_path)
