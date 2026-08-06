@@ -10,6 +10,7 @@ import time
 import warnings
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -18,6 +19,15 @@ from tqdm import tqdm
 
 
 Clock = Callable[[], float]
+
+
+def wandb_run_name(run_mode: str, now: datetime | None = None) -> str:
+    """Return a timestamped name for fresh runs and a stable resume name."""
+    base_name = os.environ.get("ULTRON_RUN_NAME", run_mode)
+    if run_mode != "fresh":
+        return base_name
+    timestamp = (now or datetime.now().astimezone()).strftime("%Y%m%d-%H%M%S")
+    return f"{timestamp}-{base_name}"
 
 
 @dataclass(frozen=True)
@@ -75,6 +85,14 @@ class UltronTelemetry:
     """W&B metrics, rolling throughput, ETA, and terminal progress."""
 
     PROJECT_NAME = "ultron-pretraining"
+    STEP_METRIC = "step"
+    TRAIN_LOSS_METRIC = "train/loss"
+    AVERAGE_TRAIN_LOSS_METRIC = "train/average_loss"
+    DEV_LOSS_METRIC = "eval/dev_loss"
+    SAMPLED_DEV_LOSS_METRIC = "eval/sampled_dev_loss"
+    LOSS_COMPARISON_CHART = "charts/train_vs_dev_loss"
+    TOKENS_PER_SECOND_METRIC = "perf/tokens_per_sec"
+    STEPS_PER_SECOND_METRIC = "perf/steps_per_sec"
     RATE_WINDOW_SECONDS = 30.0
     RENDER_INTERVAL_SECONDS = 0.5
 
@@ -98,6 +116,12 @@ class UltronTelemetry:
         self.last_steps_per_sec = 0.0
         self.last_eta_seconds = 0
         self._tracker_warning_emitted = False
+        self._chart_warning_emitted = False
+        self._train_loss_total = 0.0
+        self._train_loss_samples = 0
+        self._loss_history_steps: list[int] = []
+        self._average_train_loss_history: list[float] = []
+        self._dev_loss_history: list[float] = []
 
     @classmethod
     def setup_accelerator_trackers(
@@ -119,7 +143,7 @@ class UltronTelemetry:
 
         run_mode = getattr(args, "mode", "continue")
         wandb_options: dict[str, Any] = {
-            "name": os.environ.get("ULTRON_RUN_NAME", run_mode),
+            "name": wandb_run_name(run_mode),
             "resume": "never" if run_mode == "fresh" else "allow",
         }
         state_path = Path(checkpoint_dir) / "training_state.json"
@@ -154,12 +178,43 @@ class UltronTelemetry:
         try:
             import wandb
 
-            wandb.define_metric("step")
-            wandb.define_metric("train/*", step_metric="step")
-            wandb.define_metric("eval/*", step_metric="step")
-            wandb.define_metric("perf/*", step_metric="step")
-            wandb.define_metric("eval/sampled_dev_loss", summary="min")
-            wandb.define_metric("train/loss", summary="last")
+            wandb.define_metric(UltronTelemetry.STEP_METRIC, hidden=True)
+            wandb.define_metric(
+                "train/*",
+                step_metric=UltronTelemetry.STEP_METRIC,
+                step_sync=True,
+            )
+            wandb.define_metric(
+                "eval/*",
+                step_metric=UltronTelemetry.STEP_METRIC,
+                step_sync=True,
+            )
+            wandb.define_metric(
+                "perf/*",
+                step_metric=UltronTelemetry.STEP_METRIC,
+                step_sync=True,
+            )
+            wandb.define_metric(
+                UltronTelemetry.TRAIN_LOSS_METRIC,
+                summary="last",
+                goal="minimize",
+            )
+            wandb.define_metric(
+                UltronTelemetry.AVERAGE_TRAIN_LOSS_METRIC,
+                summary="min",
+                goal="minimize",
+            )
+            wandb.define_metric(
+                UltronTelemetry.DEV_LOSS_METRIC,
+                summary="min",
+                goal="minimize",
+            )
+            wandb.define_metric(
+                UltronTelemetry.SAMPLED_DEV_LOSS_METRIC,
+                hidden=True,
+                summary="min",
+                goal="minimize",
+            )
         except (ImportError, RuntimeError) as error:
             warnings.warn(
                 f"W&B metric definitions were not applied: {error}",
@@ -263,13 +318,54 @@ class UltronTelemetry:
             self.pbar = None
 
     def log_step(self, metrics: Mapping[str, Any], step: int) -> None:
-        self.accelerator.log(dict(metrics), step=step)
+        payload = dict(metrics)
+        payload[self.STEP_METRIC] = step
+        self.accelerator.log(payload, step=step)
 
     def _performance_metrics(self) -> dict[str, float]:
         return {
-            "perf/tokens_per_sec": self.last_throughput,
-            "perf/steps_per_sec": self.last_steps_per_sec,
+            self.TOKENS_PER_SECOND_METRIC: self.last_throughput,
+            self.STEPS_PER_SECOND_METRIC: self.last_steps_per_sec,
         }
+
+    def _record_train_loss(self, loss: float) -> None:
+        if math.isfinite(loss):
+            self._train_loss_total += loss
+            self._train_loss_samples += 1
+
+    def _finish_train_loss_interval(self, fallback: float) -> float:
+        if self._train_loss_samples == 0:
+            return fallback
+        average = self._train_loss_total / self._train_loss_samples
+        self._train_loss_total = 0.0
+        self._train_loss_samples = 0
+        return average
+
+    def _build_loss_comparison_chart(self):
+        """Build the compact train-average versus sampled-dev W&B chart."""
+        if not self.accelerator.is_main_process:
+            return None
+        try:
+            import wandb
+
+            return wandb.plot.line_series(
+                xs=self._loss_history_steps,
+                ys=[
+                    self._average_train_loss_history,
+                    self._dev_loss_history,
+                ],
+                keys=["Average train loss", "Sampled dev loss"],
+                title="Average Train Loss vs Sampled Dev Loss",
+                xname="Optimizer step",
+            )
+        except (ImportError, RuntimeError, ValueError) as error:
+            if not self._chart_warning_emitted:
+                warnings.warn(
+                    f"W&B loss comparison chart could not be built: {error}",
+                    stacklevel=2,
+                )
+                self._chart_warning_emitted = True
+            return None
 
     def log_training_step(
         self,
@@ -277,11 +373,16 @@ class UltronTelemetry:
         loss: float,
         lr: float,
     ) -> None:
+        self._record_train_loss(loss)
         metrics = {
-            "train/loss": loss,
+            self.TRAIN_LOSS_METRIC: loss,
             "train/lr": lr,
             **self._performance_metrics(),
         }
+        if self.last_dev_loss is not None:
+            # Hold the latest sampled estimate between validation passes so the
+            # dashboard renders a continuous, explicitly sampled dev-loss line.
+            metrics[self.DEV_LOSS_METRIC] = self.last_dev_loss
         self.log_step(metrics, step)
 
     def log_evaluation(
@@ -292,13 +393,24 @@ class UltronTelemetry:
         lr: float,
     ) -> None:
         """Log a deliberately sampled validation estimate."""
+        self._record_train_loss(train_loss)
+        average_train_loss = self._finish_train_loss_interval(train_loss)
         self.set_last_dev_loss(dev_loss)
+        self._loss_history_steps.append(step)
+        self._average_train_loss_history.append(average_train_loss)
+        self._dev_loss_history.append(dev_loss)
+
         metrics = {
-            "eval/sampled_dev_loss": dev_loss,
-            "train/loss": train_loss,
+            self.DEV_LOSS_METRIC: dev_loss,
+            self.SAMPLED_DEV_LOSS_METRIC: dev_loss,
+            self.TRAIN_LOSS_METRIC: train_loss,
+            self.AVERAGE_TRAIN_LOSS_METRIC: average_train_loss,
             "train/lr": lr,
             **self._performance_metrics(),
         }
+        comparison_chart = self._build_loss_comparison_chart()
+        if comparison_chart is not None:
+            metrics[self.LOSS_COMPARISON_CHART] = comparison_chart
         self.log_step(metrics, step)
 
 

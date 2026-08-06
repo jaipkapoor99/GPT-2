@@ -9,6 +9,7 @@ from config import UltronConfig
 from scripts.tokenize_dataset import (
     _atomic_json_write,
     _atomic_shard_write,
+    _is_tokenization_complete,
     _load_resume_state,
     _new_state,
     _save_resume_state,
@@ -79,3 +80,11 @@ def test_outputs_without_resume_state_are_rejected(tmp_path):
 
     with pytest.raises(RuntimeError, match="without an exact resume checkpoint"):
         _load_resume_state(tmp_path, 8, 2, UltronConfig())
+
+
+def test_complete_state_is_detected_without_reopening_dataset():
+    state = make_state()
+    state.update({"next_shard": 2, "committed_tokens": 16})
+
+    assert _is_tokenization_complete(state, 8, 2)
+    assert not _is_tokenization_complete(state, 8, 3)

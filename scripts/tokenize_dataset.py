@@ -183,6 +183,25 @@ def _new_state(
     }
 
 
+def _is_tokenization_complete(
+    state: dict,
+    shard_size_tokens: int,
+    max_shards: int,
+) -> bool:
+    """Return whether the requested shard set is fully committed."""
+    return (
+        state["next_shard"] == max_shards
+        and state["committed_tokens"] == max_shards * shard_size_tokens
+    )
+
+
+def _close_iterator(iterator) -> None:
+    """Best-effort cancellation of an exhausted streaming iterator."""
+    close = getattr(iterator, "close", None)
+    if callable(close):
+        close()
+
+
 def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
     config = UltronConfig()
     output_dir = Path("shards_edu")
@@ -209,6 +228,13 @@ def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
         _save_resume_state(output_dir, state, [], previous_pending_file=None)
         state["pending_tokens"] = 0
         state["pending_tokens_file"] = ".pending_tokens_0000.npy"
+
+    if _is_tokenization_complete(state, shard_size_tokens, max_shards):
+        print(
+            f"Pre-tokenization already complete: "
+            f"{state['committed_tokens']:,} tokens committed."
+        )
+        return
 
     tokenizer = AutoTokenizer.from_pretrained(
         state["tokenizer_name"],
@@ -343,6 +369,7 @@ def main(shard_size_tokens: int = 100_000_000, max_shards: int = 100) -> None:
                     f"✓ Atomically committed shard {shard_index - 1:04d}"
                 )
     finally:
+        _close_iterator(iterator)
         telemetry.close()
 
     if stop_requested:

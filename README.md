@@ -301,6 +301,11 @@ Launch pre-training:
 accelerate launch train.py --mode=fresh
 ```
 
+Fresh W&B runs are named with a local timestamp prefix, for example
+`20260806-193356-fresh`. If `ULTRON_RUN_NAME` is set, its value follows the
+timestamp, such as `20260806-193356-baseline`. Continued runs retain their
+existing W&B identity and are not renamed.
+
 Training and validation both read their shard partitions in deterministic
 sequential order. Neither DataLoader enables shuffling. Checkpoint resume
 therefore fast-forwards by the recorded optimizer step without reconstructing
