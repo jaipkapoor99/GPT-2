@@ -11,17 +11,42 @@ from bisect import bisect_right
 
 import torch
 import numpy as np
-from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import DataLoader, Dataset, Sampler, SequentialSampler, Subset
 from config import UltronConfig
+
+
+class EpochRandomSampler(Sampler[int]):
+    """Deterministically shuffle indices using a distinct permutation per epoch."""
+
+    def __init__(self, data_source: Dataset, seed: int):
+        self.data_source = data_source
+        self.seed = seed
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        if epoch < 0:
+            raise ValueError("epoch cannot be negative")
+        self.epoch = epoch
+
+    def __iter__(self):
+        indices = np.arange(len(self.data_source), dtype=np.int32)
+        np.random.default_rng(self.seed + self.epoch).shuffle(indices)
+        return (int(index) for index in indices)
+
+    def __len__(self) -> int:
+        return len(self.data_source)
+
 
 class ZeroCopyShardedDataset(Dataset):
     """
     Memory-mapped dataset that reads one token window per sample.
     """
-    def __init__(self, bin_shards, sequence_length=1024, step=256):
+    def __init__(self, bin_shards, sequence_length=1024, step=None):
         self.bin_shards = bin_shards
         self.T = sequence_length
-        self.step = step
+        self.step = sequence_length if step is None else step
+        if self.T <= 0 or self.step <= 0:
+            raise ValueError("sequence_length and step must be greater than zero")
         
         self.shard_memmaps = []
         self.shard_offsets = []
@@ -64,13 +89,14 @@ class ZeroCopyShardedDataset(Dataset):
         return x, y
 
 
-def split_train_dev_datasets(bin_shards, sequence_length, step=256):
+def split_train_dev_datasets(bin_shards, sequence_length, step=None):
     """Create leakage-safe train/dev datasets.
 
     Multiple-shard corpora are split at a shard boundary. A single-shard
     corpus uses contiguous windows with a gap large enough to prevent the
     train and validation windows from sharing tokens.
     """
+    step = sequence_length if step is None else step
     if len(bin_shards) >= 2:
         train_shard_count = min(
             len(bin_shards) - 1,
@@ -116,7 +142,7 @@ def get_dataloaders(config: UltronConfig, accelerator):
     train_ds, dev_ds = split_train_dev_datasets(
         bin_shards,
         sequence_length=config.T,
-        step=256,
+        step=config.T,
     )
     if len(train_ds) == 0 or len(dev_ds) == 0:
         raise ValueError(
@@ -127,10 +153,22 @@ def get_dataloaders(config: UltronConfig, accelerator):
         f"Sequences Available: {len(train_ds):,} train / {len(dev_ds):,} dev"
     )
     
-    # Preserve corpus order so checkpoint fast-forwarding is deterministic and
-    # does not require persisting sampler permutations.
-    train_loader = DataLoader(train_ds, batch_size=config.B, num_workers=2, pin_memory=False)
-    dev_loader = DataLoader(dev_ds, batch_size=config.B, num_workers=2, pin_memory=False)
+    train_sampler = EpochRandomSampler(train_ds, seed=config.data_seed)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=config.B,
+        sampler=train_sampler,
+        num_workers=2,
+        pin_memory=False,
+        drop_last=True,
+    )
+    dev_loader = DataLoader(
+        dev_ds,
+        batch_size=config.B,
+        sampler=SequentialSampler(dev_ds),
+        num_workers=2,
+        pin_memory=False,
+    )
 
     train_loader, dev_loader = accelerator.prepare(
         train_loader, dev_loader

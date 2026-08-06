@@ -20,6 +20,7 @@ class UltronConfig:
     max_steps: int = 152587     # Total training steps (~10B tokens at 65k tokens/step)
     eval_interval: int = 250    # Evaluation interval
     eval_batches: int = 20      # Batches sampled during frequent validation
+    data_seed: int = 1337       # Deterministic per-epoch training shuffle seed
 
     rope_base: float = 10000.0  # RoPE frequency base parameter
     logit_softcap: float = 15.0 # Gemma 2 standard logit softcapping (prevents overconfidence)

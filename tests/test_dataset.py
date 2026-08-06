@@ -6,6 +6,7 @@ from torch.utils.data import SequentialSampler
 
 from config import UltronConfig
 from dataset import (
+    EpochRandomSampler,
     ZeroCopyShardedDataset,
     get_dataloaders,
     split_train_dev_datasets,
@@ -63,7 +64,7 @@ def test_single_shard_split_leaves_non_overlapping_gap(tmp_path):
     assert last_train_token < first_dev_token
 
 
-def test_dataloaders_preserve_sequential_corpus_order(tmp_path, monkeypatch):
+def test_dataloaders_shuffle_train_and_preserve_dev_order(tmp_path, monkeypatch):
     shard_dir = tmp_path / "shards_edu"
     shard_dir.mkdir()
     for index in range(2):
@@ -84,5 +85,23 @@ def test_dataloaders_preserve_sequential_corpus_order(tmp_path, monkeypatch):
     config = UltronConfig(B=2, T=8)
     train_loader, dev_loader = get_dataloaders(config, FakeAccelerator())
 
-    assert isinstance(train_loader.sampler, SequentialSampler)
+    assert isinstance(train_loader.sampler, EpochRandomSampler)
     assert isinstance(dev_loader.sampler, SequentialSampler)
+    assert train_loader.drop_last is True
+    assert train_loader.dataset.step == config.T
+    assert dev_loader.dataset.step == config.T
+
+
+def test_epoch_random_sampler_is_reproducible_and_changes_each_epoch():
+    dataset = list(range(100))
+    first = EpochRandomSampler(dataset, seed=42)
+    second = EpochRandomSampler(dataset, seed=42)
+
+    epoch_zero = list(first)
+    assert epoch_zero == list(second)
+    assert sorted(epoch_zero) == dataset
+
+    first.set_epoch(1)
+    second.set_epoch(1)
+    assert list(first) == list(second)
+    assert list(first) != epoch_zero

@@ -106,6 +106,7 @@ def make_trainer(max_steps=2, is_test_mode=True, num_processes=1):
         min_lr=1e-3,
         eval_interval=1,
         eval_batches=20,
+        data_seed=1337,
         is_test_mode=is_test_mode,
     )
     model = TinyLanguageModel()

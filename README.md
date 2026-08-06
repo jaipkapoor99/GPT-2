@@ -117,7 +117,7 @@ Ultron-113M Layout:
 - **PyTorch Muon Optimizer:** Built-in `torch.optim.Muon` handles 2D matrix weights, combined with fused `AdamW` for 1D vectors and embeddings.
 - **Rust-Engine Batch Tokenizer:** Sub-process tokenization via Rust `backend_tokenizer.encode_batch` streaming at **~4.34 Million tokens/sec** into compact `uint16` binary shards.
 - **Memory-Mapped Pipeline:** `np.memmap` keeps the 10B-token corpus on disk and copies only each requested window to the `int64` dtype required by PyTorch embeddings.
-- **Deterministic Corpus Order:** Training uses sequential sampling with no shuffle state, making checkpoint fast-forwarding simple and reproducible.
+- **Deterministic Shuffling:** Training uses seeded, epoch-specific permutations over non-overlapping windows. Validation remains sequential, and checkpoint resume reconstructs the correct permutation before fast-forwarding.
 
 ---
 
@@ -306,10 +306,11 @@ Fresh W&B runs are named with a local timestamp prefix, for example
 timestamp, such as `20260806-193356-baseline`. Continued runs retain their
 existing W&B identity and are not renamed.
 
-Training and validation both read their shard partitions in deterministic
-sequential order. Neither DataLoader enables shuffling. Checkpoint resume
-therefore fast-forwards by the recorded optimizer step without reconstructing
-or storing sampler permutations.
+Training uses deterministic epoch-specific shuffling with `data_seed`, while
+validation remains sequential. Samples use a stride equal to the context
+length, so adjacent dataset windows do not overlap. Checkpoint resume derives
+the data epoch and batch offset from the recorded optimizer step, reconstructs
+the same permutation, and fast-forwards without storing the permutation.
 
 ---
 

@@ -111,7 +111,11 @@ class UltronTrainer:
         self.accelerator.wait_for_everyone()
 
         # Persist the current step and wandb run ID so we can resume correctly
-        state_payload = {"step": self.step, "max_steps": self.config.max_steps}
+        state_payload = {
+            "step": self.step,
+            "max_steps": self.config.max_steps,
+            "data_seed": self.config.data_seed,
+        }
         run_id = self.telemetry.get_wandb_run_id()
         if run_id:
             state_payload["wandb_run_id"] = run_id
@@ -133,8 +137,13 @@ class UltronTrainer:
         self.print_rich(f"[bold yellow]⚡ Pre-training for {self.config.max_steps:,} steps ({self.total_training_tokens:,} total tokens)...[/bold yellow]\n")
         # Training loop without tqdm progress bar
         
+        batches_per_epoch = len(self.train_loader)
+        consumed_batches = (
+            self.step * self.accelerator.gradient_accumulation_steps
+        )
+        data_epoch, skip_count = divmod(consumed_batches, batches_per_epoch)
+
         if self.step > 0:
-            skip_count = (self.step * self.accelerator.gradient_accumulation_steps) % len(self.train_loader)
             self.print_rich(f"[bold yellow]⏩ Fast-forwarding dataset past {skip_count:,} batches...[/bold yellow]")
             active_dataloader = self.accelerator.skip_first_batches(
                 self.train_loader,
@@ -142,6 +151,8 @@ class UltronTrainer:
             )
         else:
             active_dataloader = self.train_loader
+        if hasattr(active_dataloader, "set_epoch"):
+            active_dataloader.set_epoch(data_epoch)
             
         while self.step < self.config.max_steps:
             for xb, yb in active_dataloader:
@@ -186,6 +197,9 @@ class UltronTrainer:
                             )
                         if is_eval_step:
                             self.evaluate(loss.item(), lr)
+            data_epoch += 1
+            if hasattr(self.train_loader, "set_epoch"):
+                self.train_loader.set_epoch(data_epoch)
             active_dataloader = self.train_loader
         
         self.telemetry.close()
