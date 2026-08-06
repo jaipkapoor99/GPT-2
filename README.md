@@ -110,7 +110,7 @@ Ultron-113M Layout:
 - **Grouped-Query Attention (GQA):** Uses 12 Query heads paired with 4 Key/Value heads, reducing memory bandwidth pressure during generation.
 - **SwiGLU FFN:** SwiGLU Gated Linear Units with hidden dimensions rounded up to multiples of 64 for optimal GPU Tensor Core utilization.
 - **Logit Soft-Capping:** `15.0 * tanh(logits / 15.0)` applied prior to loss calculation to prevent logit explosion.
-- **Muon Newton-Schulz Optimizer:** Orthogonalized momentum updates for 2D matrix weights, combined with fused `AdamW` for 1D vectors and embeddings.
+- **PyTorch Muon Optimizer:** Built-in `torch.optim.Muon` handles 2D matrix weights, combined with fused `AdamW` for 1D vectors and embeddings.
 - **Rust-Engine Batch Tokenizer:** Sub-process tokenization via Rust `backend_tokenizer.encode_batch` streaming at **~4.34 Million tokens/sec** into compact `uint16` binary shards.
 - **Memory-Mapped Pipeline:** `np.memmap` keeps the 10B-token corpus on disk and copies only each requested window to the `int64` dtype required by PyTorch embeddings.
 
@@ -179,8 +179,8 @@ git clone https://github.com/jaipkapoor99/ultron.git
 cd ultron
 
 # Fast environment setup using uv
-uv venv --python 3.13 venv
-source venv/bin/activate
+uv venv --python 3.13 .venv
+source .venv/bin/activate
 uv pip install -r requirements.txt nvidia-cuda-nvcc
 ```
 
@@ -313,10 +313,10 @@ Building and pre-training Ultron-113M from scratch provided critical real-world 
 - **Strict Launcher Enforcement**: Early script execution via `python3` failed with `RuntimeError` due to uninitialized process groups. Standardizing `accelerate launch` across all entry points solved device allocation cleanly.
 - **DeepSpeed Compatibility vs. Dual-Optimizers**: DeepSpeed's unified optimizer engine conflicted with Ultron's dual-optimizer architecture (**Muon** for 2D body weights + **AdamW** for 1D vectors). Using native PyTorch `bf16` + `torch.compile` provided superior stability and peak throughput (~186.3k tok/s) without framework friction.
 
-### 2. 🐍 Virtual Environment (`venv`) & C-Header Management
+### 2. 🐍 Virtual Environment (`.venv`) & C-Header Management
 
 - **Python Version & C-Header Bottlenecks (`Python.h`)**: `torch.compile()` failed on Python 3.14 due to missing C headers (`Python.h: No such file or directory`). Switching virtual environments to **Python 3.13 via `uv`** provided standalone C-headers natively, eliminating compiler breakage.
-- **Package Name Collision**: Installing `muon` via `pip` pulled down an unrelated single-cell bioinformatics library instead of Keller Jordan's neural network optimizer. Resolved by importing `muon-optimizer`.
+- **Built-in Muon**: PyTorch 2.13 provides `torch.optim.Muon`, so the training stack has no external optimizer dependency.
 
 ### 3. 🚀 High-Throughput Tokenization & Memory Slicing (`np.memmap`)
 

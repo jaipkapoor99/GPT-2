@@ -12,7 +12,6 @@ Implements:
 """
 
 import math
-import socket
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -55,12 +54,6 @@ def load_ultron_state_dict(model: "UltronModel", state_dict: dict):
 
     model.tie_weights()
     return sorted(missing), sorted(unexpected)
-
-def _find_free_port():
-    """Find a free TCP port on localhost to avoid EADDRINUSE crashes."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
 
 def apply_rotary_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     """ Apply Rotary Position Embedding (RoPE) to input tensor x """
@@ -284,22 +277,12 @@ class UltronModel(nn.Module):
             return UltronOutput(logits=logits, loss=loss, past_key_values=present_key_values)
         return UltronOutput(logits=logits, loss=loss)
 
-    def configure_optimizers(self, learning_rate: float, device_type: str = 'cuda'):
+    def configure_optimizers(self, learning_rate: float):
         """Hybrid Muon + AdamW optimizer setup.
         
         Muon handles 2D weight matrices (attention, MLP projections).
         AdamW handles everything else (embeddings, norms, biases).
         """
-        from muon import Muon
-        if not torch.distributed.is_initialized():
-            backend = "nccl" if device_type == "cuda" else "gloo"
-            port = _find_free_port()
-            torch.distributed.init_process_group(
-                backend=backend,
-                rank=0,
-                world_size=1,
-                init_method=f"tcp://127.0.0.1:{port}"
-            )
         partitions = self.partition_optimizer_parameters()
         muon_params = partitions["muon"]
         adamw_decay_params = partitions["adamw_decay"]
@@ -310,7 +293,12 @@ class UltronModel(nn.Module):
             {"params": adamw_nodecay_params, "weight_decay": 0.0}
         ]
         
-        optimizer_muon = Muon(muon_params, lr=0.04, momentum=0.95)
+        optimizer_muon = torch.optim.Muon(
+            muon_params,
+            lr=0.04,
+            momentum=0.95,
+            weight_decay=0.0,
+        )
         optimizer_adamw = torch.optim.AdamW(adamw_groups, lr=learning_rate, betas=(0.9, 0.95), fused=True)
         return optimizer_muon, optimizer_adamw
 

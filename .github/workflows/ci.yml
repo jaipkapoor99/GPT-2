@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python 3.13 CPU tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: requirements.txt
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Create virtual environment
+        run: uv venv --python 3.13 .venv
+
+      - name: Install CPU PyTorch and dependencies
+        run: |
+          uv pip install --python .venv/bin/python \
+            torch==2.13.0 \
+            --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --python .venv/bin/python -r requirements.txt
+
+      - name: Validate dependencies
+        run: uv pip check --python .venv/bin/python
+
+      - name: Compile Python sources
+        run: |
+          .venv/bin/python -m compileall -q \
+            config.py dataset.py model.py telemetry.py train.py trainer.py \
+            scripts tests
+
+      - name: Run tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: .venv/bin/python -m pytest -q -p no:cacheprovider

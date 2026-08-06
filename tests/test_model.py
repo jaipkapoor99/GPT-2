@@ -140,6 +140,14 @@ def test_optimizer_partition_is_complete_and_disjoint(model):
     assert all(parameter.ndim < 2 for parameter in partitions["adamw_decay"])
 
 
+def test_uses_official_muon(model):
+    optimizer_muon, _ = model.configure_optimizers(model.config.learning_rate)
+    assert isinstance(optimizer_muon, torch.optim.Muon)
+    assert optimizer_muon.param_groups[0]["nesterov"] is True
+    assert optimizer_muon.param_groups[0]["ns_steps"] == 5
+    assert optimizer_muon.param_groups[0]["weight_decay"] == 0.0
+
+
 def test_repeated_batch_can_be_learned():
     torch.manual_seed(7)
     config = tiny_config(C=16, n_head=2, n_kv_head=1, n_layer=1, vocab_size=32)
