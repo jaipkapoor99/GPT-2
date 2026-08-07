@@ -504,27 +504,10 @@ stops at EOS by default; `--ignore-eos` forces the complete token budget, while
 
 ---
 
-## 🎓 Learning Experiences & 🛠️ Engineering Battles Overcome
+## 🎓 Engineering Journey
 
-Building and pre-training Ultron-113M from scratch provided critical real-world systems engineering insights:
-
-### 1. ⚙️ Accelerate Setup & Launcher Protocols
-
-- **Strict Launcher Enforcement**: Early script execution via `python3` failed with `RuntimeError` due to uninitialized process groups. Standardizing `accelerate launch` across all entry points solved device allocation cleanly.
-- **DeepSpeed Compatibility vs. Dual-Optimizers**: DeepSpeed's unified optimizer engine conflicted with Ultron's dual-optimizer architecture (**Muon** for 2D body weights + **AdamW** for 1D vectors). Using native PyTorch `bf16` + `torch.compile` provided superior stability and peak throughput (~186.3k tok/s) without framework friction.
-
-### 2. 🐍 Virtual Environment (`.venv`) & C-Header Management
-
-- **Python Version & C-Header Bottlenecks (`Python.h`)**: The system Python 3.14 installation lacked development headers, causing `torch.compile()` to fail with `Python.h: No such file or directory`. Standardizing on uv-managed **Python 3.14.6** supplies the required standalone headers while retaining PyTorch 2.13 compiler support.
-- **Built-in Muon**: PyTorch 2.13 provides `torch.optim.Muon`, so the training stack has no external optimizer dependency.
-
-### 3. 🚀 High-Throughput Tokenization & Memory Slicing (`np.memmap`)
-
-- **Rust Batch Tokenization Speedup**: Replacing Python `for`-loop tokenization with Rust `backend_tokenizer.encode_batch` (`num_threads=1` per worker process) increased dataset streaming speed by **>100x** from 40k tok/s to **~4.34 Million tokens/sec**!
-- **Bounded Sample Reads**: Pre-tokenizing into contiguous 100M-token `uint16` shards allows memory-mapped access while allocating only the requested window and its `int64` conversion during training.
-- **Non-Overlapping, Shuffled Windows**: Dataset stride equals the 1,024-token context length. A seeded per-epoch sampler restores gradient diversity without duplicating 75% of every adjacent window, and resume reconstructs the exact epoch and batch offset.
-- **Leakage-Safe Validation**: Training and validation are split at shard boundaries, preventing overlapping token windows from crossing dataset partitions.
-- **Rotating Sampled Validation**: Frequent evaluation advances through the dev loader rather than repeatedly scoring its first 20 batches; the cursor is checkpointed and wraps deterministically.
+The mistakes, corrections, and systems lessons behind Ultron are documented in
+[JOURNEY.md](JOURNEY.md).
 
 ---
 

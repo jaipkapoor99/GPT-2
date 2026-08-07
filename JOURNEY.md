@@ -111,6 +111,42 @@ non-deterministic resume risks, malformed tokenization state, missing or
 truncated shards, incompatible checkpoints, telemetry edge cases, and unsafe
 upload conditions.
 
+## Additional Engineering Lessons
+
+### Accelerate Setup and Launcher Protocols
+
+- **Strict launcher enforcement:** Early execution through `python3` failed
+  because distributed process groups were not initialized. Standardizing on
+  `accelerate launch` across every entry point made device setup explicit.
+- **DeepSpeed and dual optimizers:** DeepSpeed's unified optimizer engine
+  conflicted with Muon for hidden matrices and AdamW for embeddings and
+  normalization parameters. Native PyTorch BF16 and `torch.compile` retained
+  the intended optimizer split while reaching approximately 186.3k tokens/s.
+
+### Python Environment and C Headers
+
+- **The `Python.h` bottleneck:** The system Python 3.14 installation lacked
+  development headers, causing `torch.compile` to fail. An uv-managed Python
+  3.14.6 environment supplied the standalone headers required by the compiler.
+- **Built-in Muon:** PyTorch 2.13 provides `torch.optim.Muon`, eliminating the
+  external optimizer dependency and its legacy checkpoint contract.
+
+### High-Throughput Tokenization and Memory Mapping
+
+- **Rust batch tokenization:** Replacing Python tokenization loops with
+  `backend_tokenizer.encode_batch` increased throughput from roughly 40k to
+  4.34 million tokens/s.
+- **Bounded sample reads:** Contiguous 100-million-token `uint16` shards support
+  memory-mapped access while allocating only the requested window and its
+  `int64` conversion.
+- **Non-overlapping shuffled windows:** A 1,024-token stride removes adjacent
+  overlap, while seeded epoch permutations retain batch diversity and exact
+  resume behavior.
+- **Leakage-safe validation:** Shard-boundary partitioning keeps related token
+  windows out of opposing train and validation splits.
+- **Rotating sampled validation:** Frequent validation advances through the dev
+  loader, wraps deterministically, and persists its cursor in checkpoints.
+
 ## Lessons Carried Forward
 
 1. Measure unique corpus coverage, not only nominal processed tokens.
