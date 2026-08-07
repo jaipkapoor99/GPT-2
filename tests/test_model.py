@@ -209,12 +209,64 @@ def test_generation_preserves_batch_and_returns_valid_token_ids(model):
     torch.manual_seed(11)
     prompt = torch.randint(0, model.config.vocab_size, (2, 5))
 
-    generated = model.generate(prompt, max_new_tokens=3, top_k=5)
+    generated = model.generate(prompt, max_new_tokens=3)
 
     assert generated.shape == (2, 8)
     assert torch.equal(generated[:, :5], prompt)
     assert generated.min() >= 0
     assert generated.max() < model.config.vocab_size
+
+
+def test_generation_delegates_token_selection(model):
+    prompt = torch.randint(0, model.config.vocab_size, (2, 5))
+    selected_token = 17
+
+    generated = model.generate(
+        prompt,
+        max_new_tokens=3,
+        token_selector=lambda _logits, tokens: torch.full(
+            (tokens.size(0), 1),
+            selected_token,
+            dtype=torch.long,
+            device=tokens.device,
+        ),
+    )
+
+    assert generated[:, -3:].tolist() == [[selected_token] * 3] * 2
+
+
+def test_generation_stops_when_every_sequence_reaches_eos(model):
+    prompt = torch.randint(0, model.config.vocab_size, (2, 5))
+    eos_token_id = 3
+
+    generated = model.generate(
+        prompt,
+        max_new_tokens=10,
+        token_selector=lambda _logits, tokens: torch.full(
+            (tokens.size(0), 1),
+            eos_token_id,
+            dtype=torch.long,
+            device=tokens.device,
+        ),
+        eos_token_id=eos_token_id,
+    )
+
+    assert generated.shape == (2, 6)
+    assert generated[:, -1].tolist() == [eos_token_id, eos_token_id]
+
+
+def test_generation_rejects_invalid_selector_output(model):
+    prompt = torch.randint(0, model.config.vocab_size, (2, 5))
+
+    with pytest.raises(ValueError, match="shape"):
+        model.generate(
+            prompt,
+            max_new_tokens=1,
+            token_selector=lambda _logits, _tokens: torch.zeros(
+                2,
+                dtype=torch.long,
+            ),
+        )
 
 
 def test_repeated_batch_can_be_learned():

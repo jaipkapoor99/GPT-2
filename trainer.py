@@ -167,6 +167,7 @@ class UltronTrainer:
             "max_steps": self.config.max_steps,
             "data_seed": self.config.data_seed,
             "dev_batch_cursor": self.dev_batch_cursor,
+            "model_config": self.config.to_metadata(),
         }
         run_id = self.telemetry.get_wandb_run_id()
         if run_id:

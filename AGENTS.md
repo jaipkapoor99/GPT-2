@@ -16,7 +16,7 @@ uv pip install -r requirements.lock
 pytest -q
 ULTRON_TEST_COMPILE=1 pytest -q tests/test_model.py -k torch_compile
 accelerate launch train.py --mode=test
-accelerate launch scripts/generate.py --prompt "Hello"
+accelerate launch scripts/generate.py --prompt "Hello" --samples 4
 ```
 
 `requirements.lock` pins backend-neutral dependencies; install the appropriate PyTorch 2.13 wheel first. The standard test suite is CPU-safe. The compiler test is opt-in because it is slower and toolchain-dependent. `train.py --mode=test` exercises the training pipeline and requires prepared dataset shards; full training should run on a CUDA device with BF16 support.

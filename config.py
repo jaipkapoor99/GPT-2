@@ -3,7 +3,7 @@ Ultron Configuration Module
 Contains dataclass parameters for the Ultron (113M) architecture.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 @dataclass
 class UltronConfig:
     B: int = 16                 # Micro-batch size per pass (65k tokens/step with grad accum 4)
@@ -42,3 +42,11 @@ class UltronConfig:
     def from_metadata(cls, **overrides):
         """Create an UltronConfig instance with optional overrides."""
         return cls(**overrides)
+
+    def to_metadata(self) -> dict:
+        """Return constructor fields suitable for exact checkpoint recovery."""
+        return {
+            item.name: getattr(self, item.name)
+            for item in fields(self)
+            if item.init
+        }

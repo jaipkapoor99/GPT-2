@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
-from typing import Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List
 
 try:
     from .config import UltronConfig
@@ -321,14 +321,45 @@ class UltronModel(nn.Module):
         return partitions
 
     @torch.no_grad()
-    def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: Optional[int] = None):
-        """ Generate autoregressively given a prompt idx using KV caching (O(N)) """
+    def generate(
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        token_selector: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        eos_token_id: Optional[int] = None,
+    ) -> torch.Tensor:
+        """Generate tokens with KV caching while delegating decoding policy.
+
+        ``UltronModel`` owns autoregressive execution and cache management.
+        Callers own the policy that selects a token from the next-token logits.
+        Without a selector, generation is greedy.
+        """
+        if max_new_tokens < 0:
+            raise ValueError("max_new_tokens cannot be negative")
+        if idx.ndim != 2 or idx.size(1) == 0:
+            raise ValueError("idx must have shape (batch, sequence) with a non-empty sequence")
+        if max_new_tokens >= self.config.T:
+            raise ValueError("max_new_tokens must be smaller than the context length")
+        if eos_token_id is not None and not 0 <= eos_token_id < self.config.vocab_size:
+            raise ValueError("eos_token_id must be inside the tokenizer vocabulary")
+
         max_prompt_len = max(1, self.config.T - max_new_tokens)
         if idx.size(1) > max_prompt_len:
             idx = idx[:, -max_prompt_len:]
-            
+
+        if max_new_tokens == 0:
+            return idx
+
+        if token_selector is None:
+            token_selector = lambda logits, _tokens: torch.argmax(
+                logits,
+                dim=-1,
+                keepdim=True,
+            )
+
         past_key_values = None
-        for i in range(max_new_tokens):
+        finished = torch.zeros(idx.size(0), dtype=torch.bool, device=idx.device)
+        for _ in range(max_new_tokens):
             if past_key_values is None:
                 # Pre-fill phase: process the entire prompt
                 idx_cond = idx
@@ -339,16 +370,25 @@ class UltronModel(nn.Module):
             out = self(idx_cond, use_cache=True, past_key_values=past_key_values)
             logits = out.logits[:, -1, :self.config.vocab_size] # Strip padded vocab
             past_key_values = out.past_key_values
-            
-            if temperature != 1.0:
-                logits = logits / temperature
-                
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-                
-            probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
+
+            idx_next = token_selector(logits, idx)
+            if idx_next.shape != (idx.size(0), 1):
+                raise ValueError("token_selector must return shape (batch, 1)")
+            if idx_next.dtype != torch.long:
+                raise TypeError("token_selector must return torch.long token IDs")
+            if idx_next.min().item() < 0 or idx_next.max().item() >= self.config.vocab_size:
+                raise ValueError("token_selector returned an ID outside the vocabulary")
+
+            if eos_token_id is not None:
+                idx_next = torch.where(
+                    finished.unsqueeze(1),
+                    torch.full_like(idx_next, eos_token_id),
+                    idx_next,
+                )
+                finished |= idx_next.squeeze(1).eq(eos_token_id)
+
             idx = torch.cat((idx, idx_next), dim=1)
-            
+            if finished.all():
+                break
+
         return idx

@@ -9,6 +9,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
+from config import UltronConfig
 from train import build_config
 from trainer import UltronTrainer
 
@@ -103,7 +104,7 @@ def make_trainer(max_steps=2, is_test_mode=True, num_processes=1):
     inputs = torch.randint(0, 16, (4, 6))
     targets = torch.roll(inputs, shifts=-1, dims=1)
     dataloader = DataLoader(TensorDataset(inputs, targets), batch_size=1)
-    config = SimpleNamespace(
+    config = UltronConfig(
         B=1,
         T=6,
         max_steps=max_steps,
@@ -113,8 +114,8 @@ def make_trainer(max_steps=2, is_test_mode=True, num_processes=1):
         eval_interval=1,
         eval_batches=20,
         data_seed=1337,
-        is_test_mode=is_test_mode,
     )
+    config.is_test_mode = is_test_mode
     model = TinyLanguageModel()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     accelerator = FakeAccelerator()
@@ -234,6 +235,7 @@ def test_only_main_process_writes_checkpoint_metadata(tmp_path):
     assert state["max_steps"] == trainer.config.max_steps
     assert state["data_seed"] == trainer.config.data_seed
     assert state["dev_batch_cursor"] == 3
+    assert state["model_config"] == trainer.config.to_metadata()
 
 
 def test_checkpoint_load_restores_step_and_validation_cursor(tmp_path):

@@ -457,28 +457,50 @@ Pre-training metrics are logged live via **Weights & Biases** under the `ultron-
 
 ---
 
-## 🧪 Concise Sample Generations (100% Pre-trained Base Checkpoint)
+## 🧪 Pre-training Sample Generations
 
-Generated via `scripts/generate.py` at step 152,587 (~70 tokens each, temperature 0.85, top-k 50):
+The following unedited samples were generated together from the step-121,500
+checkpoint. The tokenizer, model, and checkpoint are loaded only once:
 
 ```bash
-accelerate launch scripts/generate.py --prompt "..." --max-tokens 70
+source .venv/bin/activate && accelerate launch scripts/generate.py \
+  --prompt "Artificial intelligence systems learn by" \
+  --prompt "To learn mathematics effectively, one must" \
+  --prompt "As the quantum portal activated, the crew stared into the alien" \
+  --max-tokens 70 \
+  --seed 1337 \
+  --temperature 0.7 \
+  --top-k 20 \
+  --top-p 0.95 \
+  --min-p 0
 ```
 
-### ⚛️ Physics
+Use `--samples N` to request multiple continuations for every prompt. Generation
+stops at EOS by default; `--ignore-eos` forces the complete token budget, while
+`--greedy` provides a maximum-probability baseline.
 
-> **Prompt:** *"The laws of thermodynamics state that"*  
-> **Output:** The laws of thermodynamics state that the volume of an isolated gas undergoing a reaction is always greater than the volume of the gas initiating the reaction. This is the theory behind nuclear reactions. There is also the theory of quantum mechanical systems, that properties of an object can only be represented through atomic interaction…
+### 🤖 Artificial Intelligence
+
+> **Prompt:** *"Artificial intelligence systems learn by"*
+>
+> **Output:** Artificial intelligence systems learn by watching the user’s behavior.
+> The ability to learn from a human’s behavior is called natural language processing (NLP). NLP is the process of learning, or ‘reading, language patterns from a human’s body language, that allows a computer to learn from a human’s facial expressions, gestures, and gestures.
+> The
 
 ### 📐 Mathematics
 
-> **Prompt:** *"To learn mathematics effectively, one must"*  
-> **Output:** To learn mathematics effectively, one must pay careful attention to the steps that follow in a given order. The most important ones are presented as a series. Here we consider the square root of 7 as a series of steps to solve algebraic equations…
+> **Prompt:** *"To learn mathematics effectively, one must"*
+>
+> **Output:** To learn mathematics effectively, one must understand and apply the concepts of addition, subtraction, multiplication, division, and place value, as well as the concept of money.
+> Students will also learn to apply mathematical concepts such as addition, subtraction, multiplication, division, and place value, as well as the concept of money.
+> This course is designed to introduce students to mathematical concepts, concepts
 
 ### 🚀 Science Fiction
 
-> **Prompt:** *"As the quantum portal activated, the crew stared into the alien"*  
-> **Output:** As the quantum portal activated, the crew stared into the alien space through the lens and the camera could see the entire universe as if it was inside the universe. To accomplish this, a quantum bit was stored in a device called a crystal…
+> **Prompt:** *"As the quantum portal activated, the crew stared into the alien"*
+>
+> **Output:** As the quantum portal activated, the crew stared into the alien world of the Sun, a celestial body 3.5 billion light-years away.
+> The alien world is one of many objects that have been discovered by scientists, including the planet, the alien planet, and a planet-sized asteroid. The object is called 2014 Y21, which is located in the constellation of Cancer
 
 ---
 
