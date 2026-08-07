@@ -578,10 +578,56 @@ class TokenizationTelemetry:
 
 
 class ValidationTelemetry:
-    """Local-only progress and timing for complete validation passes."""
+    """W&B-backed progress and timing for complete validation passes."""
 
+    PROJECT_NAME = UltronTelemetry.PROJECT_NAME
+    LOSS_METRIC = "validation/loss"
+    TOKENS_PER_SECOND_METRIC = "validation/tokens_per_sec"
+    PROGRESS_METRIC = "validation/progress_percent"
     RATE_WINDOW_SECONDS = 30.0
     RENDER_INTERVAL_SECONDS = 0.5
+
+    @classmethod
+    def setup_accelerator(
+        cls,
+        config,
+        *,
+        project_name: str | None = None,
+        run_name: str | None = None,
+    ) -> Accelerator:
+        """Create a fresh W&B run dedicated to one full validation pass."""
+        accelerator = Accelerator(log_with="wandb")
+        timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+        accelerator.init_trackers(
+            project_name or cls.PROJECT_NAME,
+            config=dataclasses.asdict(config),
+            init_kwargs={
+                "wandb": {
+                    "name": run_name or f"{timestamp}-full-validation",
+                    "job_type": "full-validation",
+                    "resume": "never",
+                    "tags": ["full-validation"],
+                }
+            },
+        )
+        cls._define_wandb_metrics(accelerator)
+        return accelerator
+
+    @classmethod
+    def _define_wandb_metrics(cls, accelerator: Accelerator) -> None:
+        if not accelerator.is_main_process:
+            return
+        try:
+            import wandb
+
+            wandb.define_metric("validation/*")
+            wandb.define_metric(cls.LOSS_METRIC, summary="min")
+            wandb.define_metric(cls.TOKENS_PER_SECOND_METRIC, summary="max")
+        except (ImportError, RuntimeError) as error:
+            warnings.warn(
+                f"W&B validation metric definitions were not applied: {error}",
+                stacklevel=2,
+            )
 
     def __init__(
         self,
@@ -607,6 +653,7 @@ class ValidationTelemetry:
         self.last_render_time = float("-inf")
         self.last_tokens_per_second = 0.0
         self.last_eta_seconds = 0
+        self._tracker_warning_emitted = False
         self.pbar: tqdm | None = None
         if accelerator.is_main_process:
             self.pbar = tqdm(
@@ -617,6 +664,32 @@ class ValidationTelemetry:
                 leave=True,
                 mininterval=self.RENDER_INTERVAL_SECONDS,
             )
+            self._update_wandb_summary(
+                {
+                    "validation/status": "running",
+                    "validation/total_sequences": total_sequences,
+                    "validation/total_tokens": (
+                        total_sequences * sequence_length
+                    ),
+                    "validation/sequences_processed": 0,
+                    "validation/tokens_processed": 0,
+                    "validation/progress_percent": 0.0,
+                }
+            )
+
+    def _update_wandb_summary(self, values: Mapping[str, Any]) -> None:
+        if not self.accelerator.is_main_process:
+            return
+        try:
+            run = self.accelerator.get_tracker("wandb", unwrap=True)
+            run.summary.update(dict(values))
+        except (AttributeError, KeyError, RuntimeError, ValueError) as error:
+            if not self._tracker_warning_emitted:
+                warnings.warn(
+                    f"W&B validation summary could not be updated: {error}",
+                    stacklevel=2,
+                )
+                self._tracker_warning_emitted = True
 
     @property
     def elapsed_seconds(self) -> float:
@@ -654,18 +727,58 @@ class ValidationTelemetry:
             processed_sequences >= self.total_sequences
             or now - self.last_render_time >= self.RENDER_INTERVAL_SECONDS
         )
-        if self.pbar is not None and should_render:
-            self.pbar.n = min(processed_sequences, self.total_sequences)
-            self.pbar.set_postfix(
-                {
-                    "loss": f"{mean_loss:.4f}",
-                    "tok/s": format_rate(tokens_per_second, "tok"),
-                    "ETA": f"{eta_seconds // 60:d}m" if eta_seconds else "—",
-                },
-                refresh=True,
+        if self.accelerator.is_main_process and should_render:
+            progress_percent = (
+                100.0 * processed_sequences / self.total_sequences
             )
+            self.accelerator.log(
+                {
+                    self.LOSS_METRIC: mean_loss,
+                    self.TOKENS_PER_SECOND_METRIC: tokens_per_second,
+                    self.PROGRESS_METRIC: progress_percent,
+                },
+                step=processed_sequences,
+            )
+            self._update_wandb_summary(
+                {
+                    "validation/sequences_processed": processed_sequences,
+                    "validation/tokens_processed": processed_tokens,
+                    "validation/progress_percent": progress_percent,
+                    "latest/validation_loss": mean_loss,
+                    "latest/validation_tokens_per_sec": tokens_per_second,
+                }
+            )
+            if self.pbar is not None:
+                self.pbar.n = min(processed_sequences, self.total_sequences)
+                self.pbar.set_postfix(
+                    {
+                        "loss": f"{mean_loss:.4f}",
+                        "tok/s": format_rate(tokens_per_second, "tok"),
+                        "ETA": f"{eta_seconds // 60:d}m" if eta_seconds else "—",
+                    },
+                    refresh=True,
+                )
             self.last_render_time = now
         return eta_seconds
+
+    def finish(self, *, loss: float, perplexity: float) -> None:
+        """Finalize W&B result fields after a successful complete pass."""
+        self._update_wandb_summary(
+            {
+                "validation/status": "complete",
+                "validation/loss": loss,
+                "validation/perplexity": perplexity,
+                "validation/sequences_processed": self.processed_sequences,
+                "validation/tokens_processed": (
+                    self.processed_sequences * self.sequence_length
+                ),
+                "validation/progress_percent": 100.0,
+                "validation/elapsed_seconds": self.elapsed_seconds,
+                "validation/average_tokens_per_sec": (
+                    self.average_tokens_per_second
+                ),
+            }
+        )
 
     def close(self) -> None:
         if self.end_time is None:

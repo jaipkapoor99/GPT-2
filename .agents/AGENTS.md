@@ -39,6 +39,8 @@
 - Use a dataset stride equal to the configured context length. Smaller strides silently count overlapping source tokens multiple times.
 - Shuffle training with deterministic epoch-specific permutations derived from `UltronConfig.data_seed`. Keep validation sequential and split at shard boundaries.
 - Report both model-processed tokens and unique-corpus coverage when evaluating a sampling design.
+- Keep DataLoader dataset state cheap to pickle under Python 3.14 `forkserver`. Serialize shard paths and metadata only; open and cache NumPy memmaps lazily inside each worker process.
+- Run complete validation as its own timestamped W&B job. Log running loss, throughput, progress, final perplexity, elapsed time, and processed counts while retaining the atomic local JSON report.
 
 ## 10. Exact Resume Is a Cross-Cutting Contract
 

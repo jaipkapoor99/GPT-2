@@ -1,8 +1,10 @@
 """Dataset splitting and shard lookup regression tests."""
 
+import pickle
+
 import numpy as np
 import pytest
-from torch.utils.data import SequentialSampler
+from torch.utils.data import DataLoader, SequentialSampler
 
 from config import UltronConfig
 from dataset import (
@@ -41,6 +43,61 @@ def test_default_stride_produces_adjacent_non_overlapping_windows(tmp_path):
     assert dataset[0][0].tolist() == [0, 1, 2, 3]
     assert dataset[1][0].tolist() == [4, 5, 6, 7]
     assert dataset[-1][1].tolist() == [13, 14, 15, 16]
+
+
+def test_shard_memmaps_open_lazily_and_are_reused(tmp_path, monkeypatch):
+    shard = write_shard(tmp_path / "tokens.bin", 0, 32)
+    real_memmap = np.memmap
+    opened_paths = []
+
+    def tracking_memmap(path, *args, **kwargs):
+        opened_paths.append(path)
+        return real_memmap(path, *args, **kwargs)
+
+    monkeypatch.setattr(np, "memmap", tracking_memmap)
+    dataset = ZeroCopyShardedDataset([shard], sequence_length=4)
+
+    assert opened_paths == []
+    assert dataset[0][0].tolist() == [0, 1, 2, 3]
+    assert dataset[1][0].tolist() == [4, 5, 6, 7]
+    assert opened_paths == [shard]
+
+
+def test_pickled_dataset_excludes_open_memmap_contents(tmp_path):
+    shard = write_shard(tmp_path / "tokens.bin", 0, 500_000)
+    dataset = ZeroCopyShardedDataset([shard], sequence_length=8)
+    assert dataset[0][0].tolist() == list(range(8))
+    assert dataset._shard_memmaps
+
+    payload = pickle.dumps(dataset)
+    restored = pickle.loads(payload)
+
+    assert len(payload) < 10_000
+    assert restored._shard_memmaps == {}
+    assert restored._memmap_owner_pid is None
+    assert restored[1][0].tolist() == list(range(8, 16))
+
+
+def test_forkserver_worker_reads_lazy_memmap_without_copying_corpus(tmp_path):
+    shard = write_shard(tmp_path / "tokens.bin", 0, 1_000)
+    dataset = ZeroCopyShardedDataset([shard], sequence_length=8)
+    loader = DataLoader(
+        dataset,
+        batch_size=2,
+        num_workers=1,
+        multiprocessing_context="forkserver",
+    )
+
+    inputs, targets = next(iter(loader))
+
+    assert inputs.tolist() == [
+        list(range(8)),
+        list(range(8, 16)),
+    ]
+    assert targets.tolist() == [
+        list(range(1, 9)),
+        list(range(9, 17)),
+    ]
 
 
 @pytest.mark.parametrize(

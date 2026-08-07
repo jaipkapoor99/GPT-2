@@ -278,6 +278,51 @@ def test_validation_telemetry_reports_local_timing_and_throughput():
         telemetry.update(processed_sequences=3, mean_loss=2.0)
 
 
+def test_validation_telemetry_logs_throttled_wandb_metrics():
+    clock = FakeClock()
+    accelerator = FakeMainAccelerator()
+    telemetry = ValidationTelemetry(
+        total_sequences=10,
+        sequence_length=20,
+        accelerator=accelerator,
+        clock=clock,
+    )
+    clock.advance(2)
+
+    telemetry.update(processed_sequences=4, mean_loss=2.5)
+
+    step, metrics = accelerator.logged[-1]
+    assert step == 4
+    assert metrics["validation/loss"] == 2.5
+    assert metrics["validation/tokens_per_sec"] == pytest.approx(40)
+    assert metrics["validation/progress_percent"] == 40
+    assert accelerator.run.summary["validation/tokens_processed"] == 80
+
+
+def test_validation_telemetry_finalizes_wandb_summary():
+    clock = FakeClock()
+    accelerator = FakeMainAccelerator()
+    telemetry = ValidationTelemetry(
+        total_sequences=10,
+        sequence_length=20,
+        accelerator=accelerator,
+        clock=clock,
+    )
+    clock.advance(5)
+    telemetry.update(processed_sequences=10, mean_loss=2.0)
+    telemetry.close()
+
+    telemetry.finish(loss=2.0, perplexity=math.exp(2.0))
+
+    summary = accelerator.run.summary
+    assert summary["validation/status"] == "complete"
+    assert summary["validation/loss"] == 2.0
+    assert summary["validation/sequences_processed"] == 10
+    assert summary["validation/tokens_processed"] == 200
+    assert summary["validation/elapsed_seconds"] == 5
+    assert summary["validation/average_tokens_per_sec"] == 40
+
+
 @pytest.mark.parametrize(
     ("rate", "expected"),
     [

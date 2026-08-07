@@ -1,4 +1,7 @@
-"""Full-validation metric tests."""
+"""Full-validation metric and W&B configuration tests."""
+
+import sys
+from types import SimpleNamespace
 
 import torch
 import torch.nn.functional as F
@@ -7,6 +10,7 @@ import pytest
 from config import UltronConfig
 from model import UltronModel
 from scripts.validate import load_checkpoint_weights, sequence_cross_entropy
+from telemetry import ValidationTelemetry
 
 
 def tiny_config():
@@ -58,3 +62,19 @@ def test_checkpoint_weight_loader_accepts_pytorch_state_dict(tmp_path):
         restored.transformer.wte.weight,
         source.transformer.wte.weight,
     )
+
+
+def test_full_validation_defines_wandb_metrics(monkeypatch):
+    definitions = []
+    fake_wandb = SimpleNamespace(
+        define_metric=lambda name, **options: definitions.append((name, options))
+    )
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    accelerator = SimpleNamespace(is_main_process=True)
+
+    ValidationTelemetry._define_wandb_metrics(accelerator)
+
+    by_name = {name: options for name, options in definitions}
+    assert by_name["validation/*"] == {}
+    assert by_name["validation/loss"]["summary"] == "min"
+    assert by_name["validation/tokens_per_sec"]["summary"] == "max"

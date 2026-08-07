@@ -27,6 +27,43 @@ The final pipeline produced 100 verified shards containing exactly 10 billion
 tokens. Uploading is now blocked unless every shard and metadata pair passes
 validation.
 
+A late checkpoint resume exposed a separate process-boundary failure. Python
+3.14 starts multiprocessing workers through `forkserver`; pickling a dataset
+that retained open NumPy memmaps copied shard contents into RAM. The main
+process and one worker consumed more than 50 GiB before the kernel OOM killer
+terminated training, leaving leaked-semaphore warnings during cleanup.
+
+The dataset now serializes only shard paths and sequence metadata. Every
+DataLoader worker opens and caches its own lightweight memmap views lazily.
+Forkserver and pickle-size regression tests enforce this invariant, turning an
+otherwise ambiguous shutdown warning into a permanent process-safety rule.
+
+The repaired run then completed all 152,587 optimizer steps and processed
+9,999,941,632 model tokens. W&B recorded 55,083 seconds of cumulative runtime,
+181,543 effective tokens per second end to end, and 189,475 tokens per second
+in the final rolling window. After the worker fix, whole-system RAM averaged
+16.9% and peaked at 20.6%, instead of climbing past 50 GiB. The RTX 5090
+averaged about 17.0 GiB of allocated VRAM and 97.7% GPU utilization; the
+26.1 GiB VRAM maximum was a transient checkpoint-save spike. Host CPU
+utilization averaged 12.3% across 16 logical CPUs, confirming that training
+remained GPU-bound.
+
+The subsequent complete dev pass evaluated 499,998,720 tokens in 17 minutes
+21 seconds. It measured a full-validation loss of 2.964989 and perplexity of
+19.3945 at 480,436 tokens per second average. Validation remained GPU-bound
+at 97.6% average GPU utilization while allocating 9.4 GiB VRAM on average,
+demonstrating that the final metric can be reproduced substantially more
+cheaply than training.
+
+Qualitative generation exposed exact phrase loops that loss and multiple-choice
+benchmarks do not measure. Sampling now combines a modest 1.1 repetition
+penalty with a no-repeat 3-gram constraint. Model execution remains in
+`UltronModel.generate`, while these adjustable decoding rules remain isolated
+in `scripts/generate.py`. A final-checkpoint stress suite generated three
+continuations each for AI, mathematics, and science-fiction prompts. All nine
+remained grammatical and avoided phrase loops without visible
+over-penalization, so the corrected policy became the documented default.
+
 ## Learning the Importance of Data Geometry
 
 Training initially used 1,024-token windows with a stride of 256, producing 75%
@@ -105,8 +142,8 @@ and contributor guidance. Dataset, telemetry, optimizer, checkpoint, and
 training-loop behavior are covered by CPU-safe tests, with CUDA validation kept
 as a separate hardware check.
 
-The suite grew to 91 passing tests. It now exercises successful behavior and
-deliberate corruption: invalid window geometry, shard-boundary errors,
+The suite now exercises successful behavior and deliberate corruption:
+invalid window geometry, shard-boundary errors,
 non-deterministic resume risks, malformed tokenization state, missing or
 truncated shards, incompatible checkpoints, telemetry edge cases, and unsafe
 upload conditions.

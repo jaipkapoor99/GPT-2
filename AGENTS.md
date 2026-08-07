@@ -25,7 +25,9 @@ accelerate launch scripts/generate.py --prompt "Hello" --samples 4
 
 Training windows use `step=config.T`: never restore the former 256-token stride, which duplicated 75% of adjacent 1,024-token samples. Training uses `EpochRandomSampler` with `config.data_seed`; validation remains sequential and split at shard boundaries. Resume must reconstruct the shuffle epoch and batch offset, reject seed drift, and preserve `dev_batch_cursor`. Sampled validation advances through the dev loader and wraps only after exhausting it.
 
-Keep W&B on its native step axis. Throughput and held dev loss are continuous; train/dev comparison uses interval-average train loss. ETA belongs in the terminal, while bookkeeping belongs in the run summary rather than separate charts.
+Dataset instances must remain cheap under Python 3.14 `forkserver` serialization. Store shard paths and compact metadata in pickled state; open `np.memmap` objects lazily inside each process and never serialize them to DataLoader workers.
+
+Keep W&B on its native step axis. Throughput and held dev loss are continuous; train/dev comparison uses interval-average train loss. ETA belongs in the terminal, while bookkeeping belongs in the run summary rather than separate charts. Full validation must create a separate timestamped W&B run and retain its local JSON result.
 
 ## Coding Style & Naming Conventions
 
@@ -35,7 +37,7 @@ No formatter is currently enforced. Keep imports minimal, add type hints to publ
 
 ## Testing Guidelines
 
-Tests use `pytest` and follow `test_<behavior>` naming. The CPU-safe suite currently has 122 tests covering model contracts, data geometry, shuffled resume, rotating validation, telemetry, atomic tokenization, shard integrity, evaluation harness behavior, and upload guards. Every bug fix needs a regression test; test corruption and boundary conditions as well as successful execution. Avoid downloads and full-model allocation unless explicitly marked slow.
+Tests use `pytest` and follow `test_<behavior>` naming. The CPU-safe suite currently has 125 tests covering model contracts, data geometry, shuffled resume, rotating validation, telemetry, atomic tokenization, shard integrity, evaluation harness behavior, multiprocessing-safe memmaps, and upload guards. Every bug fix needs a regression test; test corruption and boundary conditions as well as successful execution. Avoid downloads and full-model allocation unless explicitly marked slow.
 
 ## Commit & Pull Request Guidelines
 

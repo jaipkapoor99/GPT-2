@@ -14,8 +14,6 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import UltronConfig
@@ -76,10 +74,24 @@ def main() -> None:
         action="store_true",
         help="Compile the model before evaluation",
     )
+    parser.add_argument(
+        "--wandb-project",
+        default=ValidationTelemetry.PROJECT_NAME,
+        help="W&B project for the dedicated full-validation run",
+    )
+    parser.add_argument(
+        "--wandb-run-name",
+        default=None,
+        help="Optional W&B run name; defaults to a timestamped name",
+    )
     args = parser.parse_args()
 
-    accelerator = Accelerator()
     config = UltronConfig.from_metadata()
+    accelerator = ValidationTelemetry.setup_accelerator(
+        config,
+        project_name=args.wandb_project,
+        run_name=args.wandb_run_name,
+    )
     _, dev_loader = get_dataloaders(config, accelerator)
 
     model = UltronModel(config)
@@ -128,22 +140,28 @@ def main() -> None:
             validation_telemetry.average_tokens_per_second
         ),
     }
+    validation_telemetry.finish(
+        loss=mean_loss,
+        perplexity=result["perplexity"],
+    )
 
-    if accelerator.is_main_process:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        temporary_output = args.output.with_suffix(args.output.suffix + ".tmp")
-        with temporary_output.open("w") as file:
-            json.dump(result, file, indent=2)
-        os.replace(temporary_output, args.output)
-        accelerator.print(
-            f"Full validation | loss {mean_loss:.6f} | "
-            f"perplexity {result['perplexity']:.4f} | "
-            f"{result['tokens']:,} tokens | "
-            f"{result['average_tokens_per_second']:,.0f} tok/s"
-        )
-        accelerator.print(f"Saved results to {args.output}")
-
-    accelerator.wait_for_everyone()
+    try:
+        if accelerator.is_main_process:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            temporary_output = args.output.with_suffix(args.output.suffix + ".tmp")
+            with temporary_output.open("w") as file:
+                json.dump(result, file, indent=2)
+            os.replace(temporary_output, args.output)
+            accelerator.print(
+                f"Full validation | loss {mean_loss:.6f} | "
+                f"perplexity {result['perplexity']:.4f} | "
+                f"{result['tokens']:,} tokens | "
+                f"{result['average_tokens_per_second']:,.0f} tok/s"
+            )
+            accelerator.print(f"Saved results to {args.output}")
+        accelerator.wait_for_everyone()
+    finally:
+        accelerator.end_training()
 
 
 if __name__ == "__main__":

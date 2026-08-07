@@ -38,33 +38,57 @@ class EpochRandomSampler(Sampler[int]):
 
 
 class ZeroCopyShardedDataset(Dataset):
-    """
-    Memory-mapped dataset that reads one token window per sample.
-    """
+    """Memory-mapped dataset with process-local, lazily opened shard views."""
+
     def __init__(self, bin_shards, sequence_length=1024, step=None):
-        self.bin_shards = bin_shards
+        self.bin_shards = list(bin_shards)
         self.T = sequence_length
         self.step = sequence_length if step is None else step
         if self.T <= 0 or self.step <= 0:
             raise ValueError("sequence_length and step must be greater than zero")
-        
-        self.shard_memmaps = []
+
+        # NumPy memmaps must never be included in the pickled dataset state.
+        # Python 3.14 uses forkserver by default, so DataLoader workers receive
+        # this object through pickle. Serializing open memmaps can copy the
+        # complete corpus into RAM.
+        self._shard_memmaps = {}
+        self._memmap_owner_pid = None
         self.shard_offsets = []
         self.shard_ends = []
         total_sequences = 0
-        
+
         for shard_path in self.bin_shards:
             num_tokens = os.path.getsize(shard_path) // 2 # uint16 = 2 bytes
             num_seqs = max(0, (num_tokens - (self.T + 1)) // self.step + 1)
-            
-            # Virtual disk view; sample conversion happens in __getitem__.
-            mmap = np.memmap(shard_path, dtype=np.uint16, mode='r')
-            self.shard_memmaps.append((mmap, num_seqs))
             self.shard_offsets.append((total_sequences, total_sequences + num_seqs))
             total_sequences += num_seqs
             self.shard_ends.append(total_sequences)
-            
+
         self.total_sequences = total_sequences
+
+    def __getstate__(self):
+        """Strip process-local mappings before spawn/forkserver serialization."""
+        state = self.__dict__.copy()
+        state["_shard_memmaps"] = {}
+        state["_memmap_owner_pid"] = None
+        return state
+
+    def _get_shard_memmap(self, shard_idx: int) -> np.memmap:
+        """Open a shard lazily and cache it only in the current process."""
+        current_pid = os.getpid()
+        if self._memmap_owner_pid != current_pid:
+            self._shard_memmaps = {}
+            self._memmap_owner_pid = current_pid
+
+        mmap = self._shard_memmaps.get(shard_idx)
+        if mmap is None:
+            mmap = np.memmap(
+                self.bin_shards[shard_idx],
+                dtype=np.uint16,
+                mode="r",
+            )
+            self._shard_memmaps[shard_idx] = mmap
+        return mmap
 
     def __len__(self):
         return self.total_sequences
@@ -81,7 +105,7 @@ class ZeroCopyShardedDataset(Dataset):
         token_start = seq_idx_in_shard * self.step
 
         # Convert the requested uint16 disk slice to int64 for embeddings.
-        mmap, _ = self.shard_memmaps[shard_idx]
+        mmap = self._get_shard_memmap(shard_idx)
         chunk = mmap[token_start : token_start + self.T + 1].astype(np.int64)
 
         x = torch.from_numpy(chunk[:self.T])

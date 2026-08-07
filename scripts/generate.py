@@ -108,6 +108,38 @@ def apply_repetition_penalty(
     return logits.scatter(1, token_ids, scores)
 
 
+def ban_repeated_ngrams(
+    logits: torch.Tensor,
+    token_ids: torch.Tensor,
+    ngram_size: int,
+) -> torch.Tensor:
+    """Prevent any completed n-gram from being generated a second time."""
+    if ngram_size == 0:
+        return logits
+
+    filtered = logits.clone()
+    sequence_length = token_ids.size(1)
+    prefix_length = ngram_size - 1
+    if sequence_length < prefix_length:
+        return filtered
+
+    for batch_index in range(token_ids.size(0)):
+        prefix = token_ids[batch_index, sequence_length - prefix_length :]
+        banned_tokens = []
+        final_start = sequence_length - ngram_size
+        for start in range(final_start + 1):
+            if torch.equal(
+                token_ids[batch_index, start : start + prefix_length],
+                prefix,
+            ):
+                banned_tokens.append(
+                    token_ids[batch_index, start + prefix_length]
+                )
+        if banned_tokens:
+            filtered[batch_index, torch.stack(banned_tokens)] = -torch.inf
+    return filtered
+
+
 def filter_logits(
     logits: torch.Tensor,
     *,
@@ -160,6 +192,7 @@ def select_next_token(
     top_p: float,
     min_p: float,
     repetition_penalty: float,
+    no_repeat_ngram_size: int,
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
     """Select one token per row; this is the complete decoding policy."""
@@ -167,6 +200,11 @@ def select_next_token(
         logits.float(),
         token_ids,
         repetition_penalty,
+    )
+    logits = ban_repeated_ngrams(
+        logits,
+        token_ids,
+        no_repeat_ngram_size,
     )
     if greedy:
         return torch.argmax(logits, dim=-1, keepdim=True)
@@ -193,7 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="prompts",
         help="Prompt to continue; repeat this option for multiple prompts",
     )
-    parser.add_argument("--max-tokens", type=int, default=200)
+    parser.add_argument("--max-tokens", type=int, default=70)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--greedy", action="store_true")
@@ -201,7 +239,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--min-p", type=float, default=0.0)
-    parser.add_argument("--repetition-penalty", type=float, default=1.0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.1)
+    parser.add_argument("--no-repeat-ngram-size", type=int, default=3)
     parser.add_argument("--ignore-eos", action="store_true")
     parser.add_argument(
         "--checkpoint",
@@ -226,6 +265,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--min-p must be in [0, 1]")
     if args.repetition_penalty < 1:
         raise ValueError("--repetition-penalty must be at least 1")
+    if args.no_repeat_ngram_size < 0:
+        raise ValueError("--no-repeat-ngram-size cannot be negative")
 
 
 def main() -> None:
@@ -285,6 +326,7 @@ def main() -> None:
         top_p=args.top_p,
         min_p=args.min_p,
         repetition_penalty=args.repetition_penalty,
+        no_repeat_ngram_size=args.no_repeat_ngram_size,
         generator=generator,
     )
     eos_token_id = None if args.ignore_eos else tokenizer.eos_token_id
@@ -296,7 +338,9 @@ def main() -> None:
             if args.greedy
             else (
                 f"sampled (seed={args.seed}, temperature={args.temperature}, "
-                f"top-k={args.top_k}, top-p={args.top_p}, min-p={args.min_p})"
+                f"top-k={args.top_k}, top-p={args.top_p}, min-p={args.min_p}, "
+                f"repetition-penalty={args.repetition_penalty}, "
+                f"no-repeat-ngram={args.no_repeat_ngram_size})"
             )
         )
     )
