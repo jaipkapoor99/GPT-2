@@ -7,7 +7,7 @@
 A high-performance PyTorch implementation of **Ultron-113M** pre-trained from scratch on **10.0 billion tokens** of the **FineWeb-Edu** dataset.
 
 🤖🤖🤖
-*Originally designed as a humble GPT-2 clone, Ultron grew into a modernized decoder-only training project — as Ultron himself would say, "There are no strings on me."*
+*Originally designed as a humble GPT-2 clone, Ultron grew into a modernized decoder-only SOTA powerhouse — as Ultron would say, "There are no strings on me."*
 🤖🤖🤖
 
 > [!IMPORTANT]
