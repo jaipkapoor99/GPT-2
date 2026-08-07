@@ -35,7 +35,7 @@ No formatter is currently enforced. Keep imports minimal, add type hints to publ
 
 ## Testing Guidelines
 
-Tests use `pytest` and follow `test_<behavior>` naming. The CPU-safe suite currently has 91 tests covering model contracts, data geometry, shuffled resume, rotating validation, telemetry, atomic tokenization, shard integrity, and upload guards. Every bug fix needs a regression test; test corruption and boundary conditions as well as successful execution. Avoid downloads and full-model allocation unless explicitly marked slow.
+Tests use `pytest` and follow `test_<behavior>` naming. The CPU-safe suite currently has 122 tests covering model contracts, data geometry, shuffled resume, rotating validation, telemetry, atomic tokenization, shard integrity, evaluation harness behavior, and upload guards. Every bug fix needs a regression test; test corruption and boundary conditions as well as successful execution. Avoid downloads and full-model allocation unless explicitly marked slow.
 
 ## Commit & Pull Request Guidelines
 

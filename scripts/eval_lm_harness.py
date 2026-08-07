@@ -1,116 +1,222 @@
-"""
-scripts/eval_lm_harness.py — lm-evaluation-harness evaluator for Ultron (113M)
-
-Evaluates the Ultron (113M) base checkpoint using EleutherAI's `lm-evaluation-harness` across:
-- `arc_easy`
-- `hellaswag`
-- `mmlu`
+"""Evaluate an Ultron checkpoint with EleutherAI's lm-evaluation-harness.
 
 Usage:
-    accelerate launch scripts/eval_lm_harness.py [--tasks=arc_easy,hellaswag] [--limit=50]
+    accelerate launch scripts/eval_lm_harness.py
+    accelerate launch scripts/eval_lm_harness.py \
+        --tasks arc_easy,hellaswag \
+        --limit 50
 """
 
+import argparse
+import json
 import os
 import sys
-import json
+from pathlib import Path
+from typing import Callable
+
 import torch
-import argparse
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from accelerate import Accelerator
 from config import UltronConfig
 from model import UltronModel, load_ultron_state_dict
-from transformers import AutoTokenizer
-from lm_eval.models.huggingface import HFLM
-from lm_eval.evaluator import simple_evaluate
-
-if not any(k in os.environ for k in ["ACCELERATE_TORCH_DEVICE", "ACCELERATE_PROCESS_ID", "LOCAL_RANK", "ACCELERATE_MIXED_PRECISION"]):
-    raise RuntimeError("Run with: accelerate launch scripts/eval_lm_harness.py ...")
-
-accelerator = Accelerator()
 
 
-def load_base_model(checkpoint_dir: str, config: UltronConfig) -> UltronModel:
-    """Instantiate model and load weights from Accelerate checkpoint."""
+DEFAULT_TASKS = (
+    "arc_easy",
+    "arc_challenge",
+    "hellaswag",
+    "openbookqa",
+    "piqa",
+    "winogrande",
+)
+
+
+def parse_tasks(value: str) -> list[str]:
+    """Parse a comma-separated task list, preserving order and removing duplicates."""
+    tasks = list(
+        dict.fromkeys(task.strip() for task in value.split(",") if task.strip())
+    )
+    if not tasks:
+        raise ValueError("--tasks must contain at least one task")
+    return tasks
+
+
+def normalize_limit(limit: int) -> int | None:
+    """Interpret zero as a complete evaluation and reject negative limits."""
+    if limit < 0:
+        raise ValueError("--limit cannot be negative")
+    return limit or None
+
+
+def select_accuracy(metrics: dict) -> float | None:
+    """Return the preferred accuracy metric without discarding a valid zero."""
+    for key in ("acc,none", "acc_norm,none", "acc"):
+        value = metrics.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def load_base_model(
+    checkpoint_dir: Path,
+    config: UltronConfig,
+    *,
+    device: torch.device | str = "cpu",
+    print_fn: Callable[[str], None] = print,
+) -> UltronModel:
+    """Instantiate Ultron and strictly load an Accelerate checkpoint."""
     model = UltronModel(config)
     weight_file = None
-    for fname in ("model.safetensors", "pytorch_model.bin", "pytorch_model/model.safetensors", "pytorch_model/pytorch_model.bin"):
-        candidate = os.path.join(checkpoint_dir, fname)
-        if os.path.exists(candidate):
+    for relative_path in (
+        "model.safetensors",
+        "pytorch_model.bin",
+        "pytorch_model/model.safetensors",
+        "pytorch_model/pytorch_model.bin",
+    ):
+        candidate = checkpoint_dir / relative_path
+        if candidate.exists():
             weight_file = candidate
             break
 
     if weight_file is None:
-        raise FileNotFoundError(f"No checkpoint weights found in '{checkpoint_dir}'")
+        raise FileNotFoundError(
+            f"No checkpoint weights found in '{checkpoint_dir}'"
+        )
 
-    accelerator.print(f"Loading weights from: {weight_file}")
-    if weight_file.endswith(".safetensors"):
+    print_fn(f"Loading weights from: {weight_file}")
+    if weight_file.suffix == ".safetensors":
         from safetensors.torch import load_file
-        state_dict = load_file(weight_file, device=str(accelerator.device))
+
+        state_dict = load_file(str(weight_file), device="cpu")
     else:
-        state_dict = torch.load(weight_file, map_location=accelerator.device, weights_only=True)
+        state_dict = torch.load(
+            weight_file,
+            map_location="cpu",
+            weights_only=True,
+        )
 
-    missing, _ = load_ultron_state_dict(model, state_dict)
+    missing, unexpected = load_ultron_state_dict(model, state_dict)
     if missing:
-        accelerator.print(f"Expected tied-weight alias omitted from checkpoint: {missing}")
-    model.to(accelerator.device)
-    model.eval()
-    return model
+        print_fn(f"Expected tied-weight alias omitted: {missing}")
+    if unexpected:
+        print_fn(f"Unexpected checkpoint keys: {unexpected}")
+    return model.to(device).eval()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Ultron EleutherAI lm-evaluation-harness Suite")
-    parser.add_argument("--checkpoint-dir", type=str, default="accelerate_checkpoint", help="Path to checkpoint directory")
-    parser.add_argument("--tasks", type=str, default="arc_easy,arc_challenge,hellaswag,openbookqa,piqa,winogrande",
-                        help="Comma-separated evaluation tasks (e.g., arc_easy,arc_challenge,hellaswag,openbookqa,piqa,winogrande,mmlu)")
-    parser.add_argument("--limit", type=int, default=50, help="Number of benchmark samples per evaluation task")
-    args = parser.parse_args()
+def save_results(results: dict, output_path: Path) -> None:
+    """Persist only task metrics, converting harness-specific value types."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_suffix(f"{output_path.suffix}.tmp")
+    with temporary_path.open("w") as handle:
+        json.dump(results.get("results", {}), handle, indent=2, default=str)
+    temporary_path.replace(output_path)
 
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Ultron EleutherAI lm-evaluation-harness suite"
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        default=Path("accelerate_checkpoint"),
+    )
+    parser.add_argument(
+        "--tasks",
+        default=",".join(DEFAULT_TASKS),
+        help="Comma-separated lm-evaluation-harness task names",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Samples per task; use 0 for complete task splits",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("logs/pre_training_checkpoint_eval.json"),
+    )
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    try:
+        task_list = parse_tasks(args.tasks)
+        eval_limit = normalize_limit(args.limit)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+
+    if not any(
+        key in os.environ
+        for key in (
+            "ACCELERATE_TORCH_DEVICE",
+            "ACCELERATE_PROCESS_ID",
+            "LOCAL_RANK",
+            "ACCELERATE_MIXED_PRECISION",
+        )
+    ):
+        raise RuntimeError(
+            "Run with: accelerate launch scripts/eval_lm_harness.py ..."
+        )
+
+    # Heavy benchmark dependencies and distributed state are initialized only
+    # for an actual evaluation, keeping helper functions CPU-testable.
+    from accelerate import Accelerator
+    from lm_eval.evaluator import simple_evaluate
+    from lm_eval.models.huggingface import HFLM
+    from transformers import AutoTokenizer
+
+    accelerator = Accelerator()
     config = UltronConfig()
-    model = load_base_model(args.checkpoint_dir, config)
+    model = load_base_model(
+        args.checkpoint_dir,
+        config,
+        device=accelerator.device,
+        print_fn=accelerator.print,
+    )
 
     accelerator.print(f"Loading tokenizer ({config.tokenizer_name})...")
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
+    if tokenizer.vocab_size != config.vocab_size:
+        raise RuntimeError(
+            f"Tokenizer vocabulary ({tokenizer.vocab_size}) does not match "
+            f"model configuration ({config.vocab_size})"
+        )
 
-    # Wrap model with lm-eval HFLM wrapper
-    lm_eval_model = HFLM(
+    evaluation_model = HFLM(
         pretrained=model,
         tokenizer=tokenizer,
         batch_size=1,
-        device=str(accelerator.device)
+        device=str(accelerator.device),
     )
-
-    task_list = [t.strip() for t in args.tasks.split(",") if t.strip()]
-    eval_limit = args.limit if args.limit and args.limit > 0 else None
-    accelerator.print(f"\n🚀 Running EleutherAI lm-evaluation-harness across tasks: {task_list} (Limit: {eval_limit if eval_limit else 'FULL'})...\n")
-
+    accelerator.print(
+        "\nRunning EleutherAI lm-evaluation-harness across "
+        f"{task_list} (limit: {eval_limit if eval_limit else 'FULL'})...\n"
+    )
     results = simple_evaluate(
-        model=lm_eval_model,
+        model=evaluation_model,
         tasks=task_list,
-        limit=eval_limit
+        limit=eval_limit,
     )
 
-    accelerator.print("\n==================================================")
-    accelerator.print("📊 ELEUTHERAI LM-EVALUATION-HARNESS REPORT")
-    accelerator.print("==================================================")
-    
-    if "results" in results:
-        for task_name, task_metrics in results["results"].items():
-            acc = task_metrics.get("acc,none") or task_metrics.get("acc_norm,none") or task_metrics.get("acc")
-            if acc is not None:
-                accelerator.print(f"• {task_name:<25} : {acc*100:.2f}%")
-            else:
-                accelerator.print(f"• {task_name:<25} : {task_metrics}")
-    accelerator.print("==================================================\n")
+    accelerator.print("=" * 50)
+    accelerator.print("ELEUTHERAI LM-EVALUATION-HARNESS REPORT")
+    accelerator.print("=" * 50)
+    for task_name, metrics in results.get("results", {}).items():
+        accuracy = select_accuracy(metrics)
+        if accuracy is None:
+            accelerator.print(f"• {task_name:<25} : {metrics}")
+        else:
+            accelerator.print(f"• {task_name:<25} : {accuracy * 100:.2f}%")
+    accelerator.print("=" * 50)
 
-    os.makedirs("logs", exist_ok=True)
-    out_path = os.path.join("logs", "pre_training_checkpoint_eval.json")
-    with open(out_path, "w") as f:
-        # Convert non-serializable objects
-        json.dump(results.get("results", {}), f, indent=2, default=str)
-
-    accelerator.print(f"✓ Results saved to '{out_path}'")
+    if accelerator.is_main_process:
+        save_results(results, args.output)
+        accelerator.print(f"Results saved to '{args.output}'")
+    accelerator.wait_for_everyone()
 
 
 if __name__ == "__main__":

@@ -168,6 +168,7 @@ ultron/
 │   ├── test_telemetry.py   # Rate, ETA, and metric-schema tests
 │   ├── test_tokenize_dataset.py # Exact-resume and atomic-write tests
 │   ├── test_training.py    # Evaluation, resume, and checkpoint-safety tests
+│   ├── test_eval_lm_harness.py # lm-evaluation entry-point tests
 │   ├── test_upload_checkpoint.py # Complete training-state upload tests
 │   ├── test_upload_dataset_shards.py # Upload validation tests
 │   └── test_validate.py    # Full-validation metric tests
@@ -323,11 +324,12 @@ Run the CPU-safe test suite locally:
 pytest -q
 ```
 
-The current suite contains 91 passing CPU-safe tests. It covers model
+The current suite contains 122 passing CPU-safe tests. It covers model
 causality and caching, optimizer partitioning, non-overlapping dataset windows,
 deterministic shuffle epochs, exact checkpoint positioning, rotating validation,
-telemetry summaries, tokenization corruption, shard validation, and upload
-guards. The optional compiler test is skipped unless explicitly enabled.
+telemetry summaries, tokenization corruption, shard validation, evaluation
+harness behavior, and upload guards. The optional compiler test is skipped
+unless explicitly enabled.
 
 Run the slower compiler smoke test explicitly:
 
